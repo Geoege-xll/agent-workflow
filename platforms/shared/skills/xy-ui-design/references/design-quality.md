@@ -144,9 +144,7 @@ keep any existing HTML as historical material without requiring an update.
 The design Agent does not edit the PM's source or create a mapping report; this association does not
 change the prototype page, dependency fingerprint, or visual-approval contract.
 
-交付具体原型页时，按[反馈消费合同](prototype-feedback.md)的当前交付入口
-先执行 `prepare-delivery`，再以同一范围执行 `open`，向用户提供经验证的各具体 HTML 的 file URI。
-需要批注或消费评审反馈时，按需读取该合同其余适用条款，复核来源修订后仅将有效意见交回原设计 Agent。
+Antigravity 在静态验证通过后交付各具体 HTML 的绝对路径或 file URI。Codex 与 Claude Code 按[反馈消费合同](prototype-feedback.md)的当前交付入口先执行 `prepare-delivery`，再以同一范围执行 `open`，交付返回的各具体 HTML 的 file URI。需要批注或消费评审反馈时，按需读取该合同其余适用条款，复核来源修订后仅将有效意见交回原设计 Agent。
 交付、批注和反馈沿用当前请求的需求、实质方案及页面确认规则。
 
 For `standards_only`, return rule differences, their basis, applicability, and existing document

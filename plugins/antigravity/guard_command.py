@@ -178,13 +178,16 @@ def additional_read_helper(helper, arguments, access, project):
                 and all(access.project_input(values[key], project, scratch=True) for key in flags - {"--host"}
                         if key in values))
     if helper == "lib/documents/validate_prototype_workspace.py":
-        # CLI 从位置参数重新选工作区。精确核对这项，随后由原校验器逐个限制相对
-        # 原型根、页面、适配器与依赖；此入口只读取指纹，不打开页面或准备交付。
+        # 包入口校验外层项目后切入该目录。具体页用 `.` 避免打开沙箱外的系统根；
+        # 历史工作区仍以实际绝对路径核对受管目录的项目身份。
         if len(arguments) < 2 or arguments[1].startswith("-"):
             return False
-        access.project_root(arguments[0], expected=project)
         values = options(arguments[2:], {"--adapter", "--json", "--standalone", "--page", "--expect"},
                          switches=("--json", "--standalone"), repeatable=("--page", "--expect"))
+        if arguments[0] != ".":
+            access.project_root(arguments[0], expected=project)
+        elif "--standalone" not in values:
+            return False
         return (access.project_input(arguments[1], project)
                 and ("--adapter" not in values or access.project_input(values["--adapter"], project)))
     if helper == "lib/documents/prototype_feedback_cli.py":
@@ -263,18 +266,6 @@ def packaged_helper(words, access, plugin, cwd, *, redirected=False):
     if len(args) < 5 or args[:2] != ["helper", "--project"]:
         return False
     helper, action, *rest = args[3:]
-    if helper == "lib/documents/prototype_feedback_cli.py" and action in {"prepare-delivery", "open", "stop"}:
-        required = ({"--root", "--request-id"} if action == "stop" else {"--root", "--adapter", "--pages"})
-        if action == "open":
-            required.update(("--plan", "--request-id"))
-        values = options(rest, required | ({"--group"} if action == "prepare-delivery" else set()), lists=("--pages",))
-        if redirected or not required <= values.keys():
-            return False
-        if "--plan" in values:
-            plan = Path(values["--plan"])
-            if plan.is_absolute() or ".." in plan.parts or values["--plan"] != plan.as_posix():
-                return False
-        return access.prototype_delivery(args[2], action, values)
     project = access.project_root(args[2])
     if helper == "lib/delivery/worktree_cli.py" and action in {"merge-ready", "merge"}:
         required = {"--repo", "--config", "--input", "--pm-id", "--expect-sha256"}

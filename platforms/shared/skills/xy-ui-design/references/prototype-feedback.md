@@ -4,6 +4,8 @@
 
 ## 当前交付：具体 file HTML 与同页独立评审
 
+本节的受管交付和本机 HTTP 评审适用于 Codex 与 Claude Code。Antigravity 按[静态验证合同](../../xy-prototype-verify/SKILL.md)直接交付可打开的具体 HTML。
+
 3.0.4 的具体 file HTML 交付入口按本节操作；实际安装版本以官方客户端清单为准。Agent 交付前，先从当前物理插件的白名单 helper 显式执行 `prepare-delivery --root --adapter --pages`，准备受管入口与公开目录；此命令幂等、不启动服务、不执行业务请求。再以同一项目、adapter、需求、request-id 和具体 pages 执行 `open`。`open` 先验证已准备，缺失返回准确的 `preparation_required`，不会悄悄修改业务 HTML。历史 `prepare` 仍是下节独立的不可变离线评审合同；处理新的 prepared 源时，先按原始字节注入来源键再移除精确 entry，旧无标签 2／3／4 字节及 V4 九项资产不变。
 
 ```text

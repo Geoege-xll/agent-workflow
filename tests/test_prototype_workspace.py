@@ -793,6 +793,8 @@ class PrototypeWorkspaceValidatorTest(unittest.TestCase):
                     set_return_link(fragment)
                     result = check(*check_page)
                     self.assertEqual(0, result.returncode, result.stderr)
+                    anchored = check(VALIDATOR, ".", *check_page[2:])
+                    self.assertEqual((0, result.stdout), (anchored.returncode, anchored.stdout), anchored.stderr)
             result = check(*check_plan)
             self.assertEqual(0, result.returncode, result.stderr)
 

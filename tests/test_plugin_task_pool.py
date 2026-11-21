@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 from uuid import uuid4
 
 from tests.test_conversation_scope import project_files
@@ -25,6 +26,7 @@ from tests.test_task_graph_records import graph
 POOL = "lib/task_pool_cli.py"
 GRAPH = "lib/task_graph_cli.py"
 FEEDBACK = "lib/documents/prototype_feedback_cli.py"
+PROTOTYPE = "lib/documents/validate_prototype_workspace.py"
 WORKTREE = "lib/delivery/worktree_cli.py"
 CAPACITY = ("--configured-subagents", "2", "--configured-writers", "2", "--host-available-subagents", "2")
 
@@ -546,7 +548,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
         prefix = f"{source_pack} helper --project {self.project}"
         helper = f"{prefix} {GRAPH}"
         usage = f"{prefix} lib/delivery/native_usage.py --host antigravity"
-        prototype = f"{prefix} lib/documents/validate_prototype_workspace.py"
+        prototype = f"{prefix} {PROTOTYPE}"
         feedback = f"{prefix} lib/documents/prototype_feedback_cli.py"
         worktree = f"{prefix} lib/delivery/worktree_cli.py"
         capabilities = f"{prefix} lib/hosts/capabilities.py --platform antigravity"
@@ -582,8 +584,12 @@ class PackagedTaskPoolTest(unittest.TestCase):
                 (f"{usage} --input usage.jsonl --output arbitrary.log", "deny"),
                 (f"{prototype} {self.project} ui --standalone --adapter project.yaml "
                  "--page first.html --page second.html --json", "allow"),
+                (f"{prototype} . ui --standalone --adapter project.yaml --page first.html --json", "allow"),
+                (f"{prototype} {self.project} ui --adapter project.yaml --json", "allow"),
+                (f"{prototype} . ui --adapter project.yaml --json", "deny"),
                 (f"{prototype} {self.workspace} ui --json", "deny"),
-                (f"{prototype} {self.project} ../ui --json", "deny"),
+                (f"{prototype} . ../ui --standalone --adapter project.yaml --page first.html --json", "deny"),
+                (f"{prototype} . ui --standalone --adapter ../project.yaml --page first.html --json", "deny"),
                 (f"{feedback} status --root {self.project} --request-id current", "allow"),
                 (f"{feedback} status --root {self.workspace} --request-id current", "deny"),
                 (f"{feedback} status --root {self.project} --request-id current --data-dir {self.workspace}", "deny"),
@@ -768,15 +774,12 @@ class PackagedTaskPoolTest(unittest.TestCase):
             with self.subTest(suffix=suffix):
                 self.assertEqual(expected, self.hook_decision(log, "run_command", {"CommandLine": command + suffix}))
 
-    def two_agy_design_tasks(self, *, other_request=None):
+    def test_antigravity_full_graph_design_uses_its_task_request(self):
         from tests.test_plugin_workflow_contract import visual_request
         from tests.test_prototype_workspace import bind_requirement_documents, write_valid_project
 
         self.project = write_valid_project(self.workspace / "multi-request")
         bind_requirement_documents(self.project)
-        home = self.workspace / "prototype-home"
-        home.mkdir()
-        self.env.update(HOME=str(home), XDG_DATA_HOME=str(home / ".local/share"))
         graph, _ = visual_request("UI-Page")
         first = graph["tasks"][0]
         first.update(state="DECLARED", blocks=[])
@@ -784,32 +787,19 @@ class PackagedTaskPoolTest(unittest.TestCase):
         page = self.project / first["owned_paths"][0]
         sibling = page.with_name("profile.html")
         sibling.write_bytes(page.read_bytes())
-        other.update(id="profile", agent_alias="profile", request_id=other_request or first["request_id"],
+        other.update(id="profile", agent_alias="profile", request_id="req-profile",
                      owned_paths=[sibling.relative_to(self.project).as_posix()])
         for document in other["controlled_document_access"]["documents"]:
             document["applies_to"] = other["owned_paths"]
         graph.update(request_id=first["request_id"], tasks=[other, first])
         record = self.workspace / "design-graph.json"
         record.write_text(json.dumps(graph), encoding="utf-8")
-        return record, first, other
-
-    def dispatch_agy_design(self, record, task):
-        claim = self.pool("antigravity", "claim", "--register", "--record", record, "--request-id", task["request_id"],
-                          "--task-id", task["id"], "--expect-sha256", digest(record), *CAPACITY)
-        return self.bind_agy(claim, "xy-uiux", self.project)
-
-    def test_antigravity_full_graph_design_uses_its_task_request(self):
-        host = "antigravity"
-        record, first, other = self.two_agy_design_tasks(other_request="req-profile")
-        page, sibling = (self.project / task["owned_paths"][0] for task in (first, other))
-        # 图首请求和本次领取的任务属于不同需求，各自的原型所有权仍由任务原件界定。
-        _, child = self.dispatch_agy_design(record, other)
-        before = digest(page)
-        prepare = ("prepare-delivery", "--root", self.project, "--adapter", "project.yaml", "--pages")
-        self.host_delivery(host, child, FEEDBACK, *prepare, *first["owned_paths"], denied=True)
-        self.assertEqual("prepared", self.host_delivery(host, child, FEEDBACK, *prepare, *other["owned_paths"])["status"])
-        self.assertEqual(before, digest(page))
-        self.assertIn('data-xy-delivery-entry="1"', sibling.read_text(encoding="utf-8"))
+        # 即使图首请求与本次任务不同，具体页仍由这次设计任务原件限定。
+        claim = self.pool("antigravity", "claim", "--register", "--record", record, "--request-id", other["request_id"],
+                          "--task-id", other["id"], "--expect-sha256", digest(record), *CAPACITY)
+        _, child = self.bind_agy(claim, "xy-uiux", self.project)
+        self.assertEqual("allow", self.hook_decision(child, "edit_file", {"Path": str(sibling)}))
+        self.assertEqual("deny", self.hook_decision(child, "edit_file", {"Path": str(page)}))
 
     def assert_review_link(self, opened):
         url = urlsplit(opened["review_url"])
@@ -824,47 +814,42 @@ class PackagedTaskPoolTest(unittest.TestCase):
         finally:
             client.close()
 
-    def test_antigravity_pm_reviews_delivered_page_while_sibling_receipt_is_unavailable(self):
-        host = "antigravity"
-        record, delivered, running = self.two_agy_design_tasks()
-        request = delivered["request_id"]
-        self.assertEqual(request, running["request_id"])
-        root = ("--root", self.project)
-        identity = (*root, "--request-id", request)
-        review = (*identity, "--adapter", "project.yaml", "--plan", "docs/plans/settings.md", "--pages")
-        prepare = (*root, "--adapter", "project.yaml", "--pages")
-        # 两名设计者都实际领取、绑定并准备其独立页面。之后父日志的可读窗口只保留后一次
-        # 创建回执；先登记的在途页面失去回执，原件里的 RUNNING/agent_ref 仍然存在。
-        _, sibling = self.dispatch_agy_design(record, running)
-        running_page, = running["owned_paths"]
-        self.host_delivery(host, sibling, FEEDBACK, "prepare-delivery", *prepare, running_page)
-        pm, child = self.dispatch_agy_design(record, delivered)
-        ready_page, = delivered["owned_paths"]
-        self.host_delivery(host, child, FEEDBACK, "prepare-delivery", *prepare, ready_page)
-        self.invoke(host, GRAPH, "update", "--input", record, "--expect-sha256", digest(record), "--patch", "-",
-                    value={"tasks": {delivered["id"]: {"set": {"state": "BUILD_VERIFIED"}}}})
-        tasks = json.loads(record.read_bytes())["tasks"]
-        self.assertEqual([(running["id"], "RUNNING"), (delivered["id"], "BUILD_VERIFIED")],
-                         [(task["id"], task["state"]) for task in tasks])
-        self.assertEqual(sibling.parents[2].name, tasks[0]["agent_ref"]["agent_id"])
-        self.assertNotIn(sibling.parents[2].name, pm.read_text(encoding="utf-8"))
-        self.host_delivery(host, pm, FEEDBACK, "open", *review, running_page, denied=True)
-        self.host_delivery(host, pm, FEEDBACK, "open", *review, ready_page, running_page, denied=True)
-        opened = self.host_delivery(host, pm, FEEDBACK, "open", *review, ready_page)
-        try:
-            self.assertEqual([(self.project / ready_page).as_uri()], opened["delivery_urls"])
-            self.assert_review_link(opened)
-            state = self.host_delivery(host, pm, FEEDBACK, "status", *identity)
-            self.assertEqual(("ready", opened["review_id"]), (state["status"], state["review_id"]))
-            self.assertEqual("stopped", self.host_delivery(host, pm, FEEDBACK, "stop", *identity)["status"])
-            self.assertEqual("stopped", self.host_delivery(host, pm, FEEDBACK, "status", *identity)["status"])
-        finally:
-            self.invoke(host, FEEDBACK, "stop", *identity)
-
-    def test_packaged_prototype_delivery_serves_the_owned_page_and_stops(self):
+    def test_antigravity_packaged_design_delivers_statically_verified_html_without_review(self):
         from tests.test_prototype_workspace import PROTOTYPE_RELATIVE, bind_requirement_documents, write_valid_project
 
-        for host in self.plugins:
+        host = "antigravity"
+        self.project = write_valid_project(self.workspace / "AGY design")
+        plan, _ = bind_requirement_documents(self.project)
+        (self.project / PROTOTYPE_RELATIVE / "index.html").unlink()
+        record, pm, child = self.claim_agy_design()
+        task = task_in(record)
+        relative, = task["owned_paths"]
+        page = self.project / relative
+        before = page.read_bytes()
+        static = (".", PROTOTYPE_RELATIVE, "--standalone", "--adapter", "project.yaml", "--page", page.name, "--json")
+        self.assertEqual("allow", self.hook_decision(child, "edit_file", {"Path": str(page)}))
+        evidence = self.host_delivery(host, child, PROTOTYPE, *static)
+        self.assertEqual([relative], [item["path"] for item in evidence["pages"]])
+        fingerprint = evidence["pages"][0]["dependency_fingerprint"]
+        self.assertRegex(fingerprint, r"^[a-f0-9]{64}$")
+
+        selected = ("--root", self.project, "--adapter", "project.yaml", "--pages", relative)
+        review = (*selected, "--plan", plan.relative_to(self.project), "--request-id", task["request_id"])
+        self.host_delivery(host, child, FEEDBACK, "prepare-delivery", *selected, denied=True)
+        self.host_delivery(host, child, FEEDBACK, "open", *review, denied=True)
+        self.update(host, self.locate(host, task["goal"]), {"set": {"state": "BUILD_VERIFIED"}})
+        self.assertEqual("BUILD_VERIFIED", task_in(record)["state"])
+        self.host_delivery(host, pm, FEEDBACK, "open", *review, denied=True)
+        self.assertEqual(evidence, self.host_delivery(host, pm, PROTOTYPE, *static,
+                         "--expect", f"{page.name}={fingerprint}"))
+        with urlopen(page.as_uri()) as original:
+            self.assertEqual(before, original.read())
+        self.assertFalse((page.parent / ".xy-prototype-entry").exists())
+
+    def test_codex_and_claude_packaged_prototype_delivery_serves_the_page_and_stops(self):
+        from tests.test_prototype_workspace import PROTOTYPE_RELATIVE, bind_requirement_documents, write_valid_project
+
+        for host in ("codex", "claude"):
             with self.subTest(host=host):
                 self.project = write_valid_project(self.workspace / host)
                 plan, _ = bind_requirement_documents(self.project)
@@ -875,48 +860,27 @@ class PackagedTaskPoolTest(unittest.TestCase):
                 home = self.workspace / host / "home"
                 home.mkdir()
                 self.env.update(HOME=str(home), XDG_DATA_HOME=str(home / ".local/share"))
-                parent = child = None
-                if host == "antigravity":
-                    record, parent, child = self.claim_agy_design()
-                    self.assertEqual(request, task_in(record)["request_id"])
-
-                def feedback(actor, action, *options, **expected):
-                    return self.host_delivery(host, actor, FEEDBACK, action, "--root", self.project, *options, **expected)
+                def feedback(action, *options):
+                    return self.host_delivery(host, None, FEEDBACK, action, "--root", self.project, *options)
 
                 selected = ("--adapter", "project.yaml", "--pages", relative)
                 identity = ("--request-id", request)
                 review = (*selected, "--plan", plan.relative_to(self.project), *identity)
-                if host == "antigravity":
-                    outside = page.with_name("another.html")
-                    outside.write_bytes(page.read_bytes())
-                    before = (digest(page), digest(outside))
-                    feedback(parent, "prepare-delivery", *selected, denied=True)
-                    feedback(child, "prepare-delivery", *selected, outside.relative_to(self.project), denied=True)
-                    self.assertEqual(before, (digest(page), digest(outside)))
-                    self.assertFalse((page.parent / ".xy-prototype-entry").exists())
-                self.assertEqual("prepared", feedback(child, "prepare-delivery", *selected)["status"])
+                self.assertEqual("prepared", feedback("prepare-delivery", *selected)["status"])
                 self.assertTrue((page.parent / ".xy-prototype-entry/entry.js").is_file())
                 self.assertIn('data-xy-delivery-entry="1"', page.read_text(encoding="utf-8"))
-                if host == "antigravity":
-                    # 使用真实原件状态更新模拟设计交付，再由原 PM 打开和停止评审。
-                    self.update(host, self.locate(host, task_in(record)["goal"]), {"set": {"state": "BUILD_VERIFIED"}})
-                    self.assertEqual("BUILD_VERIFIED", task_in(record)["state"])
-                    feedback(parent, "open", *selected, "--plan", plan.relative_to(self.project),
-                             "--request-id", "different-request", denied=True)
-                opened = feedback(parent, "open", *review)
+                opened = feedback("open", *review)
                 try:
                     self.assertEqual(("ready", request, [page.as_uri()]),
                                      (opened["status"], opened["request_id"], opened["delivery_urls"]))
                     self.assertEqual(page.as_uri(), opened["delivery_url"])
                     self.assert_review_link(opened)
-                    if host == "antigravity":
-                        feedback(parent, "stop", "--request-id", "different-request", denied=True)
-                    state = feedback(parent, "status", *identity)
+                    state = feedback("status", *identity)
                     self.assertEqual(("ready", opened["review_id"]), (state["status"], state["review_id"]))
-                    self.assertEqual("stopped", feedback(parent, "stop", *identity)["status"])
-                    self.assertEqual("stopped", feedback(parent, "status", *identity)["status"])
+                    self.assertEqual("stopped", feedback("stop", *identity)["status"])
+                    self.assertEqual("stopped", feedback("status", *identity)["status"])
                 finally:
-                    # 即使 Hook 或 HTTP 断言失败，夹具所有者仍回收刚创建的本机进程。
+                    # 即使 HTTP 断言失败，夹具所有者仍回收刚创建的本机进程。
                     self.invoke(host, FEEDBACK, "stop", "--root", self.project, *identity)
 
     def accept_host_candidate(self, host, candidate, scratch):

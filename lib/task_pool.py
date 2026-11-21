@@ -159,8 +159,6 @@ class RegisteredTask:
     record: str
     execution_root: Path
     task: dict
-    source: dict
-    prototype_claim: str | None
 
 
 def _snapshot(root: Path, path: str, expected: str | None = None) -> Snapshot:
@@ -342,8 +340,7 @@ def registered_tasks(root: Path, pm_id: str) -> tuple[RegisteredTask, ...]:
         if errors:
             raise TaskGraphError("已登记任务原件需要核对")
         return tuple(
-            RegisteredTask(snap.descriptor["path"], Path(snap.descriptor["execution_roots"][task["id"]]), task,
-                           snap.source, data["records"][snap.descriptor["path"]].get("prototype_claim"))
+            RegisteredTask(snap.descriptor["path"], Path(snap.descriptor["execution_roots"][task["id"]]), task)
             for snap in snapshots for task in snap.tasks
         )
 

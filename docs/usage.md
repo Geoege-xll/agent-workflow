@@ -93,11 +93,13 @@ PM 负责提出方案并向你解释推荐理由。已有依据足够时，PM �
 
 ## 原型、验证与独立 QA
 
-交付多页原型时，在每个页面的 `body` 上用 `data-prototype-group="用户端/订单"` 声明已确认的目录层级。要给已有交付页补分组，可在该组页面的 `prepare-delivery --pages …` 命令中加 `--group '用户端/订单'`。同组可以一次登记多页，分组名称取自项目原有目录或已确认的页面结构。
+交付多页原型时，在每个页面的 `body` 上用 `data-prototype-group="用户端/订单"` 声明已确认的目录层级。Codex 和 Claude Code 可用 `prepare-delivery --pages … --group '用户端/订单'` 给已有交付页补分组。同组可以一次登记多页，分组名称取自项目原有目录或已确认的页面结构。
 
 需要原型的 UI 任务由设计 Agent 在所选 adapter 的 `docs.standards_root/prototype` 内制作可交互 HTML，并返回需求覆盖、规范符合性和交付一致性的三维自检。PM 将 REQ 到具体页面及实际状态锚点的关联写入同一主题计划；原型 HTML、静态验收、依赖指纹与视觉确认继续保留，不恢复计划 Markdown 转 HTML 生成链，也不增加第二个原型 QA。
 
-交付入口是项目内具体原型页的 file URL。Agent／PM 交付前先从当前物理插件白名单 helper 执行 `prepare-delivery`，显式指定实际项目、同一 adapter 和本轮 pages；它幂等准备受管入口／公开目录，不启动服务或业务请求。再用 `open` 指定相同项目／adapter、唯一需求 Markdown、request-id 与 pages。open 先验证准备，缺失返回准确的 `preparation_required`，不会暗改业务 HTML。未准备模板不可作为完整交付。
+Antigravity 直接交付静态验证通过的各具体 HTML 的绝对路径或 file URI，由 PM 请用户确认具体页、改动和操作步骤，批准仍绑定页面依赖指纹。如果已有受管页面的工具缓存无法在当前宿主读取，须报告该页静态校验未通过，并保留原稿及缓存。
+
+Codex 和 Claude Code 交付前先从当前物理插件白名单 helper 执行 `prepare-delivery`，显式指定实际项目、同一 adapter 和本轮 pages；它幂等准备受管入口／公开目录，不启动服务或业务请求。再用 `open` 指定相同项目／adapter、唯一需求 Markdown、request-id 与 pages。open 先验证准备，缺失返回准确的 `preparation_required`，不会暗改业务 HTML。未准备模板不可作为完整交付。
 
 ```text
 bash <physical-plugin-root>/lib/python_runtime.sh -B -X utf8 <physical-plugin-root>/plugins/source_pack.py helper --project <physical-project-root> lib/documents/prototype_feedback_cli.py prepare-delivery --root <physical-project-root> --adapter <selected-project-adapter> --pages <project-relative-HTML>

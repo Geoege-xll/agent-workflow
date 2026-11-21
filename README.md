@@ -4,6 +4,8 @@
 
 本源码为 **xy-workflow 3.1.0**，配套 **Native Agent Config 0.1.8**。组件发行状态与下载摘要见包内描述。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
 
+`3.1.0` 的 Antigravity 原型交付由设计角色制作具体 HTML，经静态校验后直接提供文件链接。用户仍确认具体页，工作流将批准绑定到页面依赖指纹。Codex 和 Claude Code 继续使用本机 HTTP 评审。[原型交付说明](docs/usage.md#原型验证与独立-qa)
+
 `3.0.9` 在 AGY CLI 的原生工具执行前核对写入分工。普通委托通过任务池领取并派给真实实现者。当前用户明确指定主会话亲自修改时，按指定目标放行。AGY 在项目内交接任务包，减少系统临时目录触发的宿主权限请求。
 
 `3.0.8` 支持 PM 按任务名称查看、修改和撤回已委托的工作。要求原型的任务在原型完成并确认后才可交接和登记交付。独立 QA 可核对用户批准的方案正文，PM 可在原需求主题登记验收结果。[持续接单与调度](docs/usage.md#pm-持续接单与调度)
