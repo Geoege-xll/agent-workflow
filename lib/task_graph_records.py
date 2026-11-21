@@ -31,6 +31,11 @@ from lib.solution_confirmation import (
     EXECUTING_OR_DELIVERED, bind_decisions, decision_gates, record_approvals,
 )
 
+from lib.hosts.dispatch_contract import DEFAULT_DISPATCH, DispatchPolicy
+from lib.hosts.handoff import (
+    HandoffPolicy, SCRATCH_SLOT_RE, SYSTEM_HANDOFF,
+    project_scratch_base as _project_scratch_base, validated_scratch_slot as _validated_scratch_slot,
+)
 from lib import task_intent
 from lib.writer_prerequisites import recheck_visual_publication, record_visuals, require_writer
 
@@ -114,7 +119,8 @@ def _publication_lock(path: Path):
 
 
 def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None,
-            task_update: dict | None = None, bound_export: dict | None = None) -> bool:
+            task_update: dict | None = None, bound_export: dict | None = None,
+            policy: DispatchPolicy = DEFAULT_DISPATCH) -> bool:
     """持协作锁核对旧指纹，再以原子替换发布；读者只见完整旧文件或新文件。
 
     不移走正式文件、不创建硬链接或常驻锁文件。PM 是该记录的单一写入者；
@@ -165,8 +171,7 @@ def publish(path: Path, body: bytes, expected: str, *, root: Path | None = None,
                         # task --output 同样可以 CAS 覆盖已有 Light 文件。若目标就是
                         # 原件，不可借未核实的输入补绑历史别名。真正已绑定的权威原件
                         # 仍可把同一身份同步到之前导出的交接包；已领取的原件由上方保护。
-                        from lib.hosts import antigravity_dispatch
-                        antigravity_dispatch.guard_public_update(older, {"set": newer})
+                        policy.guard_public_update(older, {"set": newer})
         validate_new_settlement_sources(path, before, body, read=read_record, decode=decode)
         from lib.foundation_qa import validate_publication
         validate_publication(path, before, body, root=root)
@@ -678,43 +683,6 @@ def update(payload: dict[str, Any], patch: Any, root: Path | None,
     return result
 
 
-# 使用独立容器完成命名升级：旧版原始 ID 也可能恰好长得像哈希名，不能靠正则区分归属。
-# 旧 agent-workflow-scratch 容器整体留待原任务或人工核对，不参与新版分配和清理。
-SCRATCH_ROOT_NAME = "agent-workflow-request-scratch"
-SCRATCH_SLOT_RE = re.compile(r"request-[0-9a-f]{64}\Z")
-AGY_HANDOFF = Path(".awf/agy-requests")
-
-
-def _project_scratch_base(root: Path) -> Path:
-    """按真实项目根路径派生唯一确定性的临时根目录，避免每个任务自造 /tmp 目录。"""
-    if root.is_symlink():
-        raise TaskGraphError(f"scratch project root must not be a symlink: {root}")
-    resolved = root.resolve(strict=True)
-    if not resolved.is_dir():
-        raise TaskGraphError(f"scratch project root must be an existing directory: {root}")
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", resolved.name).strip("-._") or "project"
-    slug = slug[:48]
-    project_hash = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:12]
-    temp_root = Path(tempfile.gettempdir()).resolve(strict=True)
-    container = temp_root / SCRATCH_ROOT_NAME
-    if container.is_symlink():
-        raise TaskGraphError(f"scratch container must not be a symlink: {container}")
-    base = container / f"{slug}-{project_hash}"
-    if base.is_symlink():
-        raise TaskGraphError(f"project scratch root must not be a symlink: {base}")
-    return base
-
-
-def _validated_scratch_slot(request_id: str | None) -> str:
-    """逻辑 ID 沿用任务图的非空字符串合同，磁盘名称只使用其完整字节摘要。"""
-    logical_id = "shared" if request_id is None else request_id
-    if not isinstance(logical_id, str) or not logical_id.strip():
-        raise TaskGraphError(f"invalid scratch request_id: {request_id!r}")
-    # 不把用户 ID 当路径片段；中文、斜杠、设备保留名及长 ID 均可安全映射。
-    # 摘要保留大小写差异，避免 macOS/Windows 上两个逻辑请求共用同一目录。
-    return "request-" + hashlib.sha256(logical_id.encode("utf-8")).hexdigest()
-
-
 @contextmanager
 def _scratch_directory(name, *, parent: int | None = None, create: bool = False):
     """相对已打开的父目录创建/打开子目录；不提供跟随链接的降级路径。"""
@@ -771,15 +739,15 @@ def _ignore_workspace_handoff(base: Path, parent: int) -> None:
         raise TaskGraphError("AGY 交接目录含有不同的 .gitignore；请保留并核对现有内容")
 
 
-def scratch_workspace(root: Path, request_id: str | None = None, *, workspace_handoff: bool = False) -> dict[str, Any]:
+def scratch_workspace(root: Path, request_id: str | None = None, *, handoff: HandoffPolicy = SYSTEM_HANDOFF) -> dict[str, Any]:
     """返回并按需创建项目的固定任务临时目录，同一请求重试与 QA 原地复用。"""
     # CLI 的原生子代理默认只能读所在工作区。只有 AGY 面向用户的交接目录
     # 采用项目内布局；准入锁、任务池私有索引和其余宿主仍使用原系统临时根。
-    base = root.absolute() / AGY_HANDOFF if workspace_handoff else _project_scratch_base(root)
+    base = handoff.current_base(root)
     slot = _validated_scratch_slot(request_id)
     target = base / slot
     with _scratch_base_directory(base, create=True) as parent:
-        if workspace_handoff:
+        if handoff.workspace_ignore:
             # 只在这个根的极短发布窗口互斥，同时请求不会把临时双链接当作坏规则。
             from lib.platform_fs import directory_lock
             with directory_lock(base, "agy-handoff-ignore", blocking=True):
@@ -953,7 +921,7 @@ def _remove_scratch_tree(parent: int, name: str, relative: str,
 
 def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bool = False,
                     dry_run: bool = False, keep: tuple[str, ...] = (), expected: str | None = None,
-                    workspace_handoff: bool = False) -> dict[str, Any]:
+                    handoff: HandoffPolicy = SYSTEM_HANDOFF) -> dict[str, Any]:
     """预览／清理明确归属且已静默的请求；摘要绑定元数据，不承诺物理磁盘回收。
 
     --all 只供已核实全部归属及静默的显式人工管理；普通任务收口必须使用自己的
@@ -970,15 +938,9 @@ def cleanup_scratch(root: Path, request_id: str | None = None, *, remove_all: bo
     if not dry_run and (not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)):
         raise TaskGraphError("cleanup-scratch deletion requires --expect-sha256 from a prior --dry-run")
     kept = _scratch_keep_paths(keep)
-    base = root.absolute() / AGY_HANDOFF if workspace_handoff else _project_scratch_base(root)
-    if workspace_handoff and request_id is not None:
-        # 升级前已分配的该请求目录仍可用旧预览摘要完成清理。新旧两处并存时
-        # 优先当前项目内目录；摘要含物理 target，不能拿一处授权删除另一处。
-        slot = _validated_scratch_slot(request_id)
-        previous = _project_scratch_base(root)
-        if not os.path.lexists(base / slot) and os.path.lexists(previous / slot):
-            base = previous
-    target = base if remove_all else base / _validated_scratch_slot(request_id)
+    slot = None if remove_all else _validated_scratch_slot(request_id)
+    base = handoff.cleanup_base(root, slot)
+    target = base if slot is None else base / slot
     report: dict[str, Any] = {
         "target": str(target), "dry_run": dry_run, "snapshot_kind": "metadata",
         "kept_files": list(kept), "cleaned": False,

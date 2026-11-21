@@ -14,7 +14,8 @@ from lib import dispatch_admission_cli as dispatch
 from lib import shared_solution_records as solutions
 from lib import task_graph_records as records
 from lib.agent_continuation import active, validate_reference
-from lib.hosts import antigravity_dispatch
+from lib.hosts.dispatch_contract import DEFAULT_DISPATCH, DispatchPolicy, reject_unexpected_marker
+from lib.hosts.handoff import project_scratch_base
 from lib.platform_fs import directory_lock
 from lib.safe_text import read_file
 from lib.task_graph import TaskGraphError, delivery_complete
@@ -57,7 +58,7 @@ def _index(root: Path, pm_id: str, *, create: bool):
     if any(ch.isspace() for ch in pm_id):
         raise TaskGraphError("pm-id must be a stable identifier without whitespace")
     key = records.digest(pm_id.encode("utf-8"))
-    base = records._project_scratch_base(root)
+    base = project_scratch_base(root)
     file = base / "task-pools" / key / "index.json"
     scope = {"schema_version": 1, "project": str(root), "project_node": _node(root), "pm": key}
     with ExitStack() as stack:
@@ -150,6 +151,15 @@ class Snapshot:
     size: int
 
 
+@dataclass(frozen=True)
+class RegisteredTask:
+    """一次只读查询从已核对原件提取的任务及其登记执行根。"""
+
+    record: str
+    execution_root: Path
+    task: dict
+
+
 def _snapshot(root: Path, path: str, expected: str | None = None) -> Snapshot:
     """从原件提取本次查询用快照。正规 CAS 会替换文件 inode，不能把它当稳定业务 ID。
 
@@ -201,9 +211,9 @@ def _require_entry(entries: dict, path: str) -> dict:
 
 
 def register(root: Path, pm_id: str, path: str, expected: str, title: str | None, *,
-             dispatch_target: dict | None = None) -> dict:
-    if dispatch_target and (pm_id.startswith("antigravity:") or antigravity_dispatch.packaged_host()):
-        antigravity_dispatch.parent_id(pm_id)
+             dispatch_target: dict | None = None, policy: DispatchPolicy = DEFAULT_DISPATCH) -> dict:
+    if dispatch_target:
+        policy.check_pool_claim()
     if title is not None:
         _text(title, "title", 120)
     path = str(dispatch._absolute(path))
@@ -318,6 +328,22 @@ def _read_pool(root: Path, entries: dict, *, selected: str | None = None) -> tup
     return snapshots, errors
 
 
+def registered_tasks(root: Path, pm_id: str) -> tuple[RegisteredTask, ...]:
+    """按物理项目和 PM 身份读取可用于授权的原件快照，不分配任务池目录。
+
+    尚无登记时返回空结果。已有 PM 槽缺索引或任一原件无效时直接失败，
+    避免将未知占用视为空闲。返回对象只包含本次读取的任务数据，锁在返回前释放。
+    """
+    with _index(root, pm_id, create=False) as (_, data):
+        snapshots, errors = _read_pool(root, data["records"])
+        if errors:
+            raise TaskGraphError("已登记任务原件需要核对")
+        return tuple(
+            RegisteredTask(snap.descriptor["path"], Path(snap.descriptor["execution_roots"][task["id"]]), task)
+            for snap in snapshots for task in snap.tasks
+        )
+
+
 def _manifest(root, snapshots, capacity):
     return {"schema_version": 1, "project_root": str(root),
             "records": [snap.descriptor for snap in snapshots], "capacity": capacity}
@@ -335,7 +361,8 @@ def check_handoff(root: Path, pm_id: str, original: Path, expected: str) -> None
             raise TaskGraphError("prototype requires its recorded admission in this PM task pool")
 
 
-def bind(root: Path, pm_id: str, receipt: dict, reference: dict) -> dict:
+def bind(root: Path, pm_id: str, receipt: dict, reference: dict, *,
+         policy: DispatchPolicy = DEFAULT_DISPATCH) -> dict:
     """拿到真实宿主回执后把 ID 写回原件，允许同图无关更新及在途撤回。
 
     池锁串行化同一 PM 的两个绑定，先检索已登记原件中的历史身份，再走原 update
@@ -360,8 +387,7 @@ def bind(root: Path, pm_id: str, receipt: dict, reference: dict) -> dict:
         if selected is None:
             raise TaskGraphError("claim target does not identify a registered task")
         task, sha = selected
-        if "dispatch_marker" in receipt and "antigravity_claim" not in task:
-            raise TaskGraphError("unexpected AGY dispatch marker on a non-AGY claim")
+        reject_unexpected_marker(task, receipt)
         if (task.get("claim_basis_sha256") != receipt["previous_sha256"]
                 or task.get("claim_prior_state") != receipt["prior_state"]):
             raise TaskGraphError("binding requires the current task's original claim receipt")
@@ -374,20 +400,8 @@ def bind(root: Path, pm_id: str, receipt: dict, reference: dict) -> dict:
         # 返回一条成功绑定的假回执。查询池时仍可如实看到外来原件已有的状态。
         if is_standalone_prototype(payload) and data["records"][path].get("prototype_claim") != receipt["previous_sha256"]:
             raise TaskGraphError("binding requires the prototype claim recorded by this PM pool")
-        if ("antigravity_claim" in task or reference["host"] == "antigravity"
-                or pm_id.startswith("antigravity:") or antigravity_dispatch.packaged_host()):
-            parent = antigravity_dispatch.parent_id(pm_id)
-            claim = task.get("antigravity_claim")
-            if reference["host"] != "antigravity" or not claim or claim["parent"] != parent:
-                raise TaskGraphError("AGY binding requires this parent's original AGY pool claim and host")
-            marker = antigravity_dispatch.dispatch_marker(root, target, task["claim_basis_sha256"], claim)
-            if receipt.get("dispatch_marker") != marker:
-                raise TaskGraphError("AGY binding requires this task's original dispatch marker")
-            if "agent_ref" not in task:
-                # 只从 PM 身份推导当前宿主日志。首次验证成功后仍走下方原 CAS；
-                # 同一领取和已绑定 ID 的重试无需回读可能已归档的宿主历史，也不会重派。
-                workspace = dispatch.execution_root(payload, task, root)
-                antigravity_dispatch.verify_creation(parent, reference["agent_id"], workspace, marker, task["role"])
+        policy.check_binding(root, target, task, receipt, reference,
+                             lambda: dispatch.execution_root(payload, task, root))
         if task.get("agent_ref") != reference:
             patch = {"tasks": {task["id"]: {"set": {"agent_ref": reference}}}}
             updated = publish_task_update(Path(path), root, payload, body, sha, patch, pool_operation=True)
@@ -436,10 +450,10 @@ def view(root: Path, pm_id: str, *, path: str | None, query: str | None, capacit
 
 
 def operate(root: Path, pm_id: str, command: str, capacity: dict, *, target: dict | None = None,
-            expected: str | None = None, receipt: dict | None = None, outcome: str | None = None) -> dict:
-    agy_pm = pm_id if pm_id.startswith("antigravity:") or antigravity_dispatch.packaged_host() else None
-    if command == "claim" and agy_pm is not None:
-        antigravity_dispatch.parent_id(agy_pm)
+            expected: str | None = None, receipt: dict | None = None, outcome: str | None = None,
+            policy: DispatchPolicy = DEFAULT_DISPATCH) -> dict:
+    if command == "claim":
+        policy.check_pool_claim()
     with _index(root, pm_id, create=False) as (file, data):
         entries = data["records"]
         if not entries:
@@ -463,4 +477,4 @@ def operate(root: Path, pm_id: str, command: str, capacity: dict, *, target: dic
             _save(file, data)
 
         return dispatch.admission(command, _manifest(root, snapshots, capacity), target, receipt, outcome,
-                                  freeze_prototype=freeze_prototype, agy_pm=agy_pm)
+                                  freeze_prototype=freeze_prototype, policy=policy)

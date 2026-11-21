@@ -165,6 +165,31 @@ class TaskPoolTest(unittest.TestCase):
                 bad.write_bytes(previous)
         self.assertEqual([], self.call(["view"])["errors"])
 
+    def test_read_only_registered_tasks_distinguish_empty_pool_missing_index_and_invalid_original(self):
+        # CLI 与进程内查询使用同一临时根。读取前后检查原件字节及记录范围，
+        # 防止 Hook 查询创建新池、返回部分有效原件或修改任务的持久状态。
+        with mock.patch.object(tempfile, "tempdir", str(self.work)):
+            self.assertEqual((), task_pool.registered_tasks(self.root, self.pm))
+            self.assertFalse((self.work / "agent-workflow-request-scratch").exists())
+            record = self.record("writer")
+            original = record.read_bytes()
+            self.reg(record)
+            snapshot, = task_pool.registered_tasks(self.root, self.pm)
+            self.assertEqual((str(record), self.root, "writer"),
+                             (snapshot.record, snapshot.execution_root, snapshot.task["id"]))
+            snapshot.task["state"] = "CANCELLED"
+            self.assertEqual(original, record.read_bytes())
+            self.assertEqual("READY", task_pool.registered_tasks(self.root, self.pm)[0].task["state"])
+
+            record.write_bytes(b"broken")
+            with self.assertRaisesRegex(ValueError, "已登记任务原件需要核对"):
+                task_pool.registered_tasks(self.root, self.pm)
+            record.write_bytes(original)
+            index, = (self.work / "agent-workflow-request-scratch").glob("*/task-pools/*/index.json")
+            index.unlink()
+            with self.assertRaisesRegex(ValueError, "missing task pool index"):
+                task_pool.registered_tasks(self.root, self.pm)
+
     def test_child_expansion_requires_its_reviewed_version_and_preserves_previous_identity(self):
         path = self.record("parent", level="Full")
         self.reg(path)
@@ -313,7 +338,9 @@ class TaskPoolTest(unittest.TestCase):
         self.enterContext(mock.patch.object(tempfile, "tempdir", str(self.work)))
 
         def bind(ident=child, receipt=current):
-            return task_pool.bind(self.root, self.pm, receipt, {"host": "antigravity", "agent_id": ident})
+            from lib.hosts.factory import dispatch_policy
+            return task_pool.bind(self.root, self.pm, receipt, {"host": "antigravity", "agent_id": ident},
+                                  policy=dispatch_policy(self.pm, reference_host="antigravity"))
 
         def invocation(text, name="invoke_subagent", selector="xy-qa"):
             return {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
@@ -369,6 +396,44 @@ class TaskPoolTest(unittest.TestCase):
         # 通用入口必须在同一创建调用实际交付属于当前版本的完整角色，且保留相同领取与工作区。
         transcript([invocation(role_prompt, selector="research"), response()])
         antigravity_dispatch.verify_creation(parent, child, self.root, marker, "xy-qa")
+        transcript(valid)
+        # 复现 1.5.13 的真实双日志形状。长 Prompt 会被短日志裁切；完整日志携带
+        # 原始字符串，子 URI 仍指短日志。命名角色和完整正文交接都必须能首绑。
+        full_log = log.with_name("transcript_full.jsonl")
+        for selector, prompt in (("xy-qa", "完整任务包\n" * 1200 + marker), ("research", role_prompt)):
+            short_call = {**invocation(prompt[:64]), "truncated_fields": ["tool_calls"]}
+            transcript([short_call, response()])
+            full_call = {**creation, "tool_calls": [
+                {"name": "invoke_subagent", "args": {"Prompt": prompt, "TypeName": selector}},
+            ]}
+            transcript([full_call, response()], full_log)
+            antigravity_dispatch.verify_creation(parent, child, self.root, marker, "xy-qa")
+        # 完整日志存在而格式不对或证据不符时，不允许改用恰好匹配的短日志。
+        transcript(valid)
+        for full_events in ([], valid, [full_call, response({**native, "workspaceUris": []})],
+                            [{**full_call, "truncated_fields": ["tool_calls"]}, response()]):
+            transcript(full_events, full_log)
+            with self.assertRaisesRegex(ValueError, "no matching native"):
+                bind()
+        # 结果中的可见回执仍可解析，但不能把自报截断、路径分段截断或畸形标记
+        # 当作完整证据。短日志完全匹配也不能替代已存在的完整日志。
+        for fields in (["content"], ["content.payload"], "content", None, [False], [" content"]):
+            with self.subTest(receipt_truncated_fields=fields):
+                transcript([full_call, {**response(), "truncated_fields": fields}], full_log)
+                with self.assertRaisesRegex(ValueError, "no matching native"):
+                    bind()
+                self.assertEqual(claimed, path.read_bytes())
+        full_log.unlink()
+        full_log.symlink_to(log)
+        with self.assertRaisesRegex(ValueError, "cannot verify"):
+            bind()
+        full_log.unlink()
+        transcript([{**creation, "truncated_fields": ["tool_calls"]}, response()])
+        with self.assertRaisesRegex(ValueError, "no matching native"):
+            bind()
+        transcript([creation, {**response(), "truncated_fields": ["content"]}])
+        with self.assertRaisesRegex(ValueError, "no matching native"):
+            bind()
         transcript(valid)
         for ident in ("xy-qa", parent, other):
             with self.subTest(agent=ident), self.assertRaises(ValueError):

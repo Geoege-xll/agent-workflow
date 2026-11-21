@@ -150,6 +150,8 @@ with only the `freeze_qa_scope` operation and reuse the returned graph SHA for s
 }]}}}}
 ```
 
+需在 QA 通过后回写 Full 主题时，先在原主题补齐非空的 `## 需求与验收`，保留本次已批准的原稿。单树的 PM 文档若未跟踪，或工作区原稿的字节与受审 Git 提交不同，导出 Reviewer 包前在同一个 `freeze_qa_scope` 对象内传入 `"scope_ref"` 与 `"projection_paths"`。前者使用上述范围对象，后者逐项填写本次回写的实际项目相对路径。QA 通过后，`record_qa_projection` 的 `reviewed` 引用该原稿及其 SHA-256。
+
 Start or resume the original Reviewer and export its current task pack with
 `task --input GRAPH --task-id QA --output PACK --expect-sha256 missing`. Ordinary Full exports
 `qa_checkpoint.kind: request`, the actual reviewed Writer IDs, the frozen `task.qa_scope_ref`,

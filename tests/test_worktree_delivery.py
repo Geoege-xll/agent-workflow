@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import copy
+from contextlib import redirect_stdout
 import hashlib
+from io import StringIO
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from lib import task_graph_records as records
 from lib.task_graph_cli import _execute, export_task_pack
+from lib.delivery import worktree_cli
 from lib.delivery.worktree_cli import DeliveryError, create, git, head, merge, merge_check, scope, target_branch
 from lib.worktree_policy import WorktreePolicyError, settings
 from tests import test_qa_handoff as qa_fixtures
@@ -520,6 +524,34 @@ class GitDeliveryTest(unittest.TestCase):
         with self.assertRaisesRegex(DeliveryError, "cannot resolve"):
             target_branch(self.repo, "auto")
         self.assertEqual("main", target_branch(self.repo, "main"))
+
+    def test_read_only_cli_runs_git_with_local_objects_only(self) -> None:
+        cases = (
+            ("target", ["--config", str(self.config)], {"target_branch": "main", "target_base": self.base}),
+            ("inspect", ["--base", self.base, "--head", self.tip], {
+                "path": ".", "base_revision": self.base, "head_revision": self.tip,
+                "changed_paths": ["src/a.py", "src/b.py"],
+                "diff_fingerprint": self.payload["authorization"]["diff_fingerprint"],
+            }),
+        )
+        for command, options, expected in cases:
+            with self.subTest(command=command):
+                output = StringIO()
+                argv = ["worktree_cli.py", command, "--repo", str(self.repo), *options]
+                # 执行真实 Git，并确认外部环境变量无法放开对象传输。
+                with (
+                    patch.object(sys, "argv", argv),
+                    patch.dict("os.environ", GIT_NO_LAZY_FETCH="0", GIT_ALLOW_PROTOCOL="file"),
+                    redirect_stdout(output),
+                    patch.object(subprocess, "run", wraps=subprocess.run) as commands,
+                ):
+                    self.assertEqual(0, worktree_cli.main())
+                self.assertEqual(expected, json.loads(output.getvalue()))
+                self.assertTrue(commands.call_args_list)
+                for call in commands.call_args_list:
+                    environment = call.kwargs["env"]
+                    self.assertEqual("1", environment.get("GIT_NO_LAZY_FETCH"), call.args[0])
+                    self.assertEqual("", environment.get("GIT_ALLOW_PROTOCOL"), call.args[0])
 
     def test_create_does_not_overwrite_or_use_inherited_root(self) -> None:
         for candidate in (self.repo, self.repo / "nested", self.workers[0]):

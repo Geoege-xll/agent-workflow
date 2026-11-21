@@ -136,15 +136,20 @@ def verify() -> dict:
     """每次独立调用核对原样来源和装配结果；摘要只证明字节，不授予业务权限。"""
     source = _json("workflow-sources.json")
     metadata = _json("sources.json")
+    payload = metadata.get("payload_sha256")
+    if not isinstance(payload, dict):
+        raise ValueError("unsupported package payload provenance")
     for relative, expected in _canonical_manifest_files(source).items():
         if hashlib.sha256(_file(relative).read_bytes()).hexdigest() != expected:
             raise ValueError("canonical source digest mismatch: " + relative)
-    for relative, expected in metadata["payload_sha256"].items():
+    for relative, expected in payload.items():
         if hashlib.sha256(_file(relative).read_bytes()).hexdigest() != expected:
             raise ValueError("package payload digest mismatch: " + relative)
     # 发行摘要不能代替外部依赖闭包：额外文件、链接与错误声明同样拒绝。
     sys.path.insert(0, str(ROOT))
+    from lib.hosts.factory import packaged_host
     from lib.skills.selected_skills import snapshot
+    packaged_host(ROOT, provenance=metadata)
     snapshot(ROOT)
     return metadata
 

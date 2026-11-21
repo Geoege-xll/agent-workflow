@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "host": "claude",
+  "manifest_target": ".claude-plugin/plugin.json",
+  "resource_context_source": "plugins/plugin-context.md",
+  "role_projection": "native-agents",
+  "resources": [
+    {"source": "plugins/claude/pm.md", "target": "agents/pm.md", "transform": "main-session-entry"},
+    {"source": "plugins/claude/settings.json", "target": "settings.json"}
+  ]
+}

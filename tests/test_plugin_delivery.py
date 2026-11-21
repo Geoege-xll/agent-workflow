@@ -38,6 +38,48 @@ def isolated_environment(root: Path) -> dict[str, str]:
 
 
 class ArchiveModesTest(unittest.TestCase):
+    def test_host_profile_rejects_layout_and_projection_overrides(self):
+        relative = "plugins/antigravity/host_profile.json"
+        original = (PACK / relative).read_bytes()
+        # 直接走实际装配读取入口，保证包配置无法声明跨宿主、共享载荷或任意变换。
+        cases = (
+            ({"host": "codex"}, {}, "identity"),
+            ({"manifest_target": ".codex-plugin/plugin.json"}, {}, "official manifest"),
+            ({"extra": "unknown"}, {}, "unknown fields"),
+            ({"role_projection": "codex-native-templates"}, {}, "role projection"),
+            ({}, {"target": "product/WORKFLOW.md"}, "allowed layout"),
+            ({}, {"target": "hooks/write_guard.py"}, "duplicated"),
+            ({}, {"source": "plugins/antigravity/../codex/plugin.json.in"}, "canonical relative"),
+            ({}, {"source": "plugins/codex/hooks/hooks.json"}, "allowed root"),
+            ({}, {"transform": "main-session-rules"}, "transform"),
+        )
+        with tempfile.TemporaryDirectory(prefix="awf-host-profile-") as temporary:
+            source = Path(temporary)
+            profile_path = source / relative
+            profile_path.parent.mkdir(parents=True)
+            for profile_changes, resource_changes, diagnostic in cases:
+                with self.subTest(changes=(profile_changes, resource_changes)):
+                    profile = json.loads(original)
+                    profile.update(profile_changes)
+                    profile["resources"][0].update(resource_changes)
+                    profile_path.write_bytes(builder.json_bytes(profile))
+                    with self.assertRaisesRegex(ValueError, diagnostic):
+                        builder.load_host_profile(source, "antigravity")
+            profile_path.unlink()
+            profile_path.symlink_to(PACK / relative)
+            with self.assertRaisesRegex(ValueError, "must not use symlinks"):
+                builder.load_host_profile(source, "antigravity")
+            profile_path.unlink()
+            linked_profile = source / "linked-profile.json"
+            linked_profile.write_bytes(original)
+            os.link(linked_profile, profile_path)
+            with self.assertRaisesRegex(ValueError, "single-link"):
+                builder.load_host_profile(source, "antigravity")
+            profile_path.unlink()
+            profile_path.write_bytes(original.replace(b'"schema_version": 1,', b'"schema_version": 2, "schema_version": 1,'))
+            with self.assertRaisesRegex(ValueError, "duplicate field"):
+                builder.load_host_profile(source, "antigravity")
+
     def test_builder_accepts_stable_and_historical_alpha_through_shared_version_contract(self):
         # 在版本门禁之后停止，不重复装配三宿主；真实载荷与依赖闭包由统一冻结构建验证。
         for version in ("3.0.1", "3.0.0-alpha.10"):
@@ -1419,6 +1461,47 @@ class PluginDeliveryTest(unittest.TestCase):
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(2, result.returncode)
         self.assertIn("digest mismatch", result.stderr)
+
+    def test_packaged_host_binding_requires_matching_entry_and_unique_native_manifest(self):
+        package = self.installed["codex"]
+        entry = package / builder.HOST_ADAPTER_ENTRY
+        provenance = package / "sources.json"
+        entry_body, provenance_body = entry.read_bytes(), provenance.read_bytes()
+        extra_manifest = package / builder.MANIFESTS["claude"]
+        host_marker = json.loads(entry_body)
+        host_marker["host"] = "claude"
+        mismatched = builder.json_bytes(host_marker)
+        command = [sys.executable, "-I", "-B", str(package / "plugins/source_pack.py"),
+                   "resource", "product/WORKFLOW.md"]
+
+        def run():
+            return subprocess.run(command, cwd=self.root, env=isolated_environment(self.root / "home"),
+                                  capture_output=True, text=True, timeout=30)
+
+        try:
+            self.assertEqual(0, run().returncode)
+            # 即使更新了载荷摘要，生成入口也不能声明与实体包来源不同的宿主。
+            entry.write_bytes(mismatched)
+            metadata = json.loads(provenance_body)
+            metadata["payload_sha256"][builder.HOST_ADAPTER_ENTRY] = hashlib.sha256(mismatched).hexdigest()
+            provenance.write_bytes(builder.json_bytes(metadata))
+            rejected = run()
+            self.assertEqual(2, rejected.returncode, rejected.stdout)
+            self.assertIn("entry does not match", rejected.stderr)
+            entry.write_bytes(entry_body)
+            provenance.write_bytes(provenance_body)
+
+            extra_manifest.parent.mkdir()
+            extra_manifest.write_bytes((self.installed["claude"] / builder.MANIFESTS["claude"]).read_bytes())
+            rejected = run()
+            self.assertEqual(2, rejected.returncode, rejected.stdout)
+            self.assertIn("unique native manifest", rejected.stderr)
+        finally:
+            entry.write_bytes(entry_body)
+            provenance.write_bytes(provenance_body)
+            if extra_manifest.exists():
+                extra_manifest.unlink()
+                extra_manifest.parent.rmdir()
 
 
 if __name__ == "__main__":

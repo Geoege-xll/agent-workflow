@@ -1405,6 +1405,36 @@ class ScratchWorkspaceTest(unittest.TestCase):
         self.clean(remove_all=True)
         self.assertEqual(b"unfinished legacy task", evidence.read_bytes())
 
+    def test_antigravity_handoff_previews_the_current_slot_before_legacy_and_preserves_pool(self):
+        from lib.hosts.antigravity_handoff import ANTIGRAVITY_HANDOFF
+
+        legacy = Path(records.scratch_workspace(self.project, "agy")["scratch_dir"])
+        (legacy / "original.json").write_bytes(b"existing task")
+        index = legacy.parent / "task-pools" / "pm" / "index.json"
+        index.parent.mkdir(parents=True)
+        index.write_bytes(b"existing index")
+
+        def cleanup(**options):
+            return records.cleanup_scratch(self.project, "agy", handoff=ANTIGRAVITY_HANDOFF, **options)
+
+        old_preview = cleanup(dry_run=True, keep=("original.json",))
+        self.assertEqual(str(legacy), old_preview["target"])
+        current = Path(records.scratch_workspace(self.project, "agy", handoff=ANTIGRAVITY_HANDOFF)["scratch_dir"])
+        self.assertEqual(self.project / ".awf/agy-requests", current.parent)
+        self.assertEqual(b"*\n", (current.parent / ".gitignore").read_bytes())
+        (current / "original.json").write_bytes(b"current evidence")
+        (current / "discard.log").write_bytes(b"temporary output")
+        # 旧预览即使和当前槽有同名文件，也不能被当成另一物理目录的删除授权。
+        with self.assertRaisesRegex(ValueError, "snapshot changed"):
+            cleanup(expected=old_preview["snapshot_sha256"], keep=("original.json",))
+        preview = cleanup(dry_run=True, keep=("original.json",))
+        self.assertEqual(str(current), preview["target"])
+        self.assertTrue(cleanup(expected=preview["snapshot_sha256"], keep=("original.json",))["cleaned"])
+        self.assertEqual(b"current evidence", (current / "original.json").read_bytes())
+        self.assertFalse((current / "discard.log").exists())
+        self.assertEqual(b"existing task", (legacy / "original.json").read_bytes())
+        self.assertEqual(b"existing index", index.read_bytes())
+
     @unittest.skipIf(os.name == "nt" or getattr(os, "geteuid", lambda: 0)() == 0,
                      "需要普通 POSIX 用户验证目录读取权限")
     def test_unreadable_directory_is_preserved_with_error(self):

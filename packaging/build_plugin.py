@@ -25,6 +25,7 @@ from lib.skills.business_confirmation_policy import (
 )
 from lib.skills.qa_review_policy import validate_pack_qa_review_policy
 from lib.skills.role_skills import CORE_SKILLS, IMPLEMENTER_ROLES, ROLE_SKILLS
+from lib.hosts.factory import ENTRY as HOST_ADAPTER_ENTRY, MANIFESTS
 from lib.documents.prototype_review import LIVE_TOOL_ASSETS as PROTOTYPE_LIVE_TOOL_ASSETS, V4_TOOL_ASSETS as PROTOTYPE_V4_TOOL_ASSETS
 from product.command_identity import load_identity
 from product.release_channels import version_channel
@@ -93,8 +94,6 @@ ANTIGRAVITY_SKILL_BODY_LIMIT = 24_000
 # CLI 0.167.0 的真实插件读取仅在纯兼容清单形态发现 Hook；即使同时提供
 # portable 根清单和兼容清单也会丢失 Hook。使用官方仍支持的单一兼容入口，
 # 不同时写 root plugin.json，确保安装后的 review/trust 能列出当前定义。
-MANIFESTS = {"codex": ".codex-plugin/plugin.json", "claude": ".claude-plugin/plugin.json",
-             "antigravity": ".antigravity-plugin/plugin.json"}
 # 原有 helper 的源包依赖显式列出。不给插件夹入中央管理器、TUI、旧安装器、
 # Windows 启动器、原生配置业务本体或任何模型服务/MCP装配入口。
 # 产品合同只发布当前工作流和身份解析需要的文件。旧 checkout 即使遗留独立的
@@ -113,7 +112,7 @@ LIB_FILES = (
     "task_graph_cli.py", "task_graph_init.py", "task_graph_records.py",
     "validate_project_docs.py", "worktree_policy.py",
 )
-HOST_LIB_FILES = ("__init__.py", "capabilities.py", "antigravity_dispatch.py")
+HOST_LIB_FILES = ("__init__.py", "capabilities.py", "factory.py", "dispatch_contract.py", "handoff.py")
 # 维护入口单独封闭白名单：既不遍历维护目录，也不读取独立产品源码或网页。
 # 新的薄模块必须经显式审查后加入；Skill 不属于九个业务核心或角色预载列表。
 MAINTENANCE_FILES = ("launcher.sh", "launcher.py", "component_store.py", "component.json")
@@ -130,6 +129,23 @@ MAINTENANCE_SKILL = "plugins/maintenance/skills/" + CONFIG_SKILL + "/SKILL.md"
 MAINTENANCE_CODEX_POLICY = "plugins/maintenance/skills/" + CONFIG_SKILL + "/agents/openai.yaml"
 MAINTENANCE_INVOCATIONS = {"codex": "$" + PLUGIN_NAME + ":" + CONFIG_SKILL,
                           "claude": "/" + PLUGIN_NAME + ":" + CONFIG_SKILL, "antigravity": "/" + CONFIG_SKILL}
+# 固定发现位置和变换属于宿主合同。配置选择源文件，不能新增发现位置、执行
+# 任意变换或覆盖已经装配好的共享资源。跨目录来源只允许明确登记的固定文件。
+HOST_RESOURCE_TARGETS = {
+    "codex": {CODEX_NATIVE_CONTEXT: "identity", "skills/" + CONFIG_SKILL + "/agents/openai.yaml": "identity",
+              "hooks/hooks.json": "identity", "hooks/session_start.py": "identity"},
+    "claude": {"agents/pm.md": "main-session-entry", "settings.json": "identity"},
+    "antigravity": {"hooks.json": "identity", "hooks/write_guard.py": "identity",
+                    "hooks/guard_command.py": "identity", "rules/AGENTS.md": "main-session-rules",
+                    "lib/hosts/antigravity_dispatch.py": "identity", "lib/hosts/antigravity_handoff.py": "identity"},
+}
+HOST_FIXED_RESOURCE_SOURCES = {
+    "skills/" + CONFIG_SKILL + "/agents/openai.yaml": MAINTENANCE_CODEX_POLICY,
+    "rules/AGENTS.md": "plugins/main-session-context.md",
+    # 只有 AGY 配置可映射原生日志与项目内交接策略；其它端仅装配共同合同。
+    "lib/hosts/antigravity_dispatch.py": "lib/hosts/antigravity_dispatch.py",
+    "lib/hosts/antigravity_handoff.py": "lib/hosts/antigravity_handoff.py",
+}
 MANIFEST_FIELDS = {
     "codex": {"name", "version", "description", "author", "skills", "hooks"},
     "claude": {"name", "version", "description", "author"},
@@ -205,6 +221,70 @@ def read_source(source: Path, relative: str) -> bytes:
     if not stat.S_ISREG(info.st_mode):
         raise ValueError("source must be a regular file: " + relative)
     return path.read_bytes()
+
+
+def _read_host_source(source: Path, relative: str) -> bytes:
+    # 先拒绝配置或映射源的硬链接，避免固定相对路径能间接引用构建树外的字节。
+    # 共用读取器继续检查祖先链接与普通文件类型，也保留现有构建调用方的签名。
+    if (source / relative).lstat().st_nlink != 1:
+        raise ValueError("host resource must be a single-link source: " + relative)
+    return read_source(source, relative)
+
+
+def load_host_profile(source: Path, host: str) -> tuple[dict, dict[str, str]]:
+    """读取宿主装配规则，验证路径及变换合同并返回本次读取的来源摘要。"""
+    relative = f"plugins/{host}/host_profile.json"
+    body = _read_host_source(source, relative)
+
+    def unique_fields(items: list[tuple[str, object]]) -> dict:
+        fields = {}
+        for key, value in items:
+            if key in fields:
+                raise ValueError("host profile contains a duplicate field: " + key)
+            fields[key] = value
+        return fields
+
+    profile = json.loads(body, object_pairs_hook=unique_fields)
+    if not isinstance(profile, dict) or set(profile) != {
+        "schema_version", "host", "manifest_target", "resource_context_source", "role_projection", "resources",
+    }:
+        raise ValueError("host profile contains missing or unknown fields: " + relative)
+    if type(profile["schema_version"]) is not int or profile["schema_version"] != 1 or profile["host"] != host:
+        raise ValueError("host profile identity or schema does not match the build host: " + relative)
+    if profile["manifest_target"] != MANIFESTS[host]:
+        raise ValueError("host profile must use its official manifest target: " + relative)
+    expected_context = "plugins/antigravity/plugin-context.md" if host == "antigravity" else "plugins/plugin-context.md"
+    if profile["resource_context_source"] != expected_context:
+        raise ValueError("host profile must use its resource context: " + relative)
+    expected_roles = "codex-native-templates" if host == "codex" else "native-agents"
+    if profile["role_projection"] != expected_roles:
+        raise ValueError("unsupported host role projection: " + relative)
+    if not isinstance(profile["resources"], list):
+        raise ValueError("host profile resources must be an array: " + relative)
+    targets = HOST_RESOURCE_TARGETS[host]
+    seen = set()
+    for entry in profile["resources"]:
+        if not isinstance(entry, dict) or set(entry) not in ({"source", "target"}, {"source", "target", "transform"}):
+            raise ValueError("host resource contains missing or unknown fields: " + relative)
+        source_name, target = entry["source"], entry["target"]
+        if not isinstance(target, str) or target not in targets:
+            raise ValueError("host resource target is outside its allowed layout: " + relative)
+        if target in seen:
+            raise ValueError("host resource target is duplicated: " + target)
+        if entry.get("transform", "identity") != targets[target]:
+            raise ValueError("host resource transform is not allowed for: " + target)
+        if not isinstance(source_name, str) or any(part in {"", ".", ".."} for part in source_name.split("/")) \
+                or any(char in source_name for char in ("\\", "\x00", ":")):
+            raise ValueError("host resource source must be a canonical relative path: " + relative)
+        fixed_source = HOST_FIXED_RESOURCE_SOURCES.get(target)
+        if (fixed_source and source_name != fixed_source) or (
+            not fixed_source and not source_name.startswith(f"plugins/{host}/")
+        ):
+            raise ValueError("host resource source is outside its allowed root: " + source_name)
+        seen.add(target)
+    if seen != targets.keys():
+        raise ValueError("host profile is missing required resources: " + relative)
+    return profile, {relative: digest(body)}
 
 
 def tree_files(source: Path, relative: str) -> list[str]:
@@ -395,13 +475,13 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     if errors:
         raise ValueError("source workflow contract failed: " + "; ".join(errors))
     result: dict[str, bytes] = {}
-    source_files: dict[str, str] = {
-        "packaging/build_plugin.py": digest(read_source(source, "packaging/build_plugin.py")),
-    }
+    profile, source_files = load_host_profile(source, host)
+    source_files["packaging/build_plugin.py"] = digest(read_source(source, "packaging/build_plugin.py"))
     projections = {}
 
-    def copy(relative: str, target: str | None = None) -> None:
-        body = read_source(source, relative)
+    def copy(relative: str, target: str | None = None, *, single_link: bool = False) -> None:
+        reader = _read_host_source if single_link else read_source
+        body = reader(source, relative)
         result[target or relative] = body
         source_files[relative] = digest(body)
 
@@ -420,7 +500,7 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     for name in HOST_LIB_FILES:
         copy("lib/hosts/" + name)
     for name in ("plugins/__init__.py", "plugins/source_pack.py", "plugins/project_context.py", "plugins/plugin-context.md"):
-        copy(name)
+        copy(name, single_link=name == "plugins/plugin-context.md")
     # 第三方依赖在非发现vendor区原样装配；统一锁先拒绝缺失/额外/篡改/链接。
     # 构建消费同一批已验证字节，不执行上游脚本、不联网，也不套内部Skill envelope。
     selected_lock, selected_files = selected_snapshot(source)
@@ -491,17 +571,35 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
     result["README.md"] = result["PLUGIN.md"]
     # 完整适配仍随包交付给独立实例，原生角色也保留其权限边界。核心 Skill
     # 只引用本宿主的适配文件；通过来源记录可核对链接实际指向的包内字节。
-    envelope_source = ("plugins/antigravity/plugin-context.md" if host == "antigravity"
-                       else "plugins/plugin-context.md")
+    envelope_source = profile["resource_context_source"]
     if envelope_source not in result:
-        copy(envelope_source)
+        copy(envelope_source, single_link=True)
     envelope = result[envelope_source]
-    copy("plugins/main-session-context.md")
+    copy("plugins/main-session-context.md", single_link=True)
     main_context = render_main_context(result["plugins/main-session-context.md"], host, envelope_source)
     # 规范源保留原样用于摘要；只对主会话实际加载的投影应用固定宿主适配。
     result["main-session-context.md"] = main_context
     projections["main-session-context.md"] = {"source": "plugins/main-session-context.md",
                                                "transform": host + "-main-session-route-v1"}
+    for resource in profile["resources"]:
+        relative, target = resource["source"], resource["target"]
+        transform = resource.get("transform", "identity")
+        if target in result:
+            raise ValueError("host resource must not replace a shared payload file: " + target)
+        if transform == "main-session-entry":
+            copy(relative, single_link=True)
+            result[target] = with_preamble(result[relative], main_context)
+            projections[target] = {"source": relative, "transform": "main-session-entry-route-v1",
+                                   "adapter": "plugins/main-session-context.md"}
+        elif transform == "main-session-rules":
+            # AGY 的主会话规则放在官方 rules 目录；源上下文已经在上面装配和校验。
+            result[target] = main_context
+            projections[target] = {"source": relative, "transform": "antigravity-main-session-route-v1"}
+        else:
+            # 原生声明只在包里投影为资源；客户端继续管理发现、Hook 信任与运行。
+            copy(relative, target, single_link=True)
+            if target != relative:
+                projections[target] = {"source": relative, "transform": "identity"}
     for name in MAINTENANCE_FILES:
         copy("plugins/maintenance/" + name)
     validate_maintenance_descriptor(source)
@@ -512,10 +610,6 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
                            "transform": host + "-maintenance-explicit-v1"}
     if host == "antigravity":
         validate_antigravity_skill_body(target, result[target])
-    if host == "codex":
-        copy(MAINTENANCE_CODEX_POLICY, "skills/" + CONFIG_SKILL + "/agents/openai.yaml")
-        projections["skills/" + CONFIG_SKILL + "/agents/openai.yaml"] = {
-            "source": MAINTENANCE_CODEX_POLICY, "transform": "identity"}
     skills = sorted(CORE_SKILLS)
     for relative in sorted(result.copy()):
         if not relative.startswith("platforms/shared/skills/"):
@@ -533,15 +627,13 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
         projections[target] = {"source": relative, "transform": transform}
         if transform != "identity":
             projections[target]["adapter"] = envelope_source
-    for role in sorted(ROLE_SKILLS):
-        if host == "codex":
-            continue
-        relative, target = "roles/" + role + ".md", "agents/" + role + ".md"
-        result[target] = render_agent(role, result[relative], envelope, host)
-        projections[target] = {"source": relative, "transform": host + "-agent-frontmatter-envelope-v1",
-                               "adapter": envelope_source}
-    if host == "codex":
-        copy(CODEX_NATIVE_CONTEXT)
+    if profile["role_projection"] == "native-agents":
+        for role in sorted(ROLE_SKILLS):
+            relative, target = "roles/" + role + ".md", "agents/" + role + ".md"
+            result[target] = render_agent(role, result[relative], envelope, host)
+            projections[target] = {"source": relative, "transform": host + "-agent-frontmatter-envelope-v1",
+                                   "adapter": envelope_source}
+    else:
         entries = []
         dependencies = {name: digest(result[name]) for name in
                         ("product/ROLES.yaml", "platforms/codex/WORKER_CONSTRAINTS.md", CODEX_NATIVE_CONTEXT)}
@@ -564,38 +656,16 @@ def payload(source: Path, host: str) -> dict[str, bytes]:
             "source_sha256": digest(result["product/ROLES.yaml"]),
             "projection_sha256": digest(result[CODEX_NATIVE_INDEX]),
             "dependencies": {item["path"]: item["sha256"] for item in entries}}
-    if host == "claude":
-        copy("plugins/claude/pm.md")
-        copy("plugins/claude/settings.json", "settings.json")
-        result["agents/pm.md"] = with_preamble(result["plugins/claude/pm.md"], main_context)
-        projections["agents/pm.md"] = {"source": "plugins/claude/pm.md", "transform": "main-session-entry-route-v1",
-                                      "adapter": "plugins/main-session-context.md"}
-        projections["settings.json"] = {"source": "plugins/claude/settings.json", "transform": "identity"}
-    if host == "codex":
-        # 官方兼容清单明确指向 hooks/hooks.json；只装配资源，不写任何 trust。
-        # 安装后必须由宿主原生 review/trust 确认当前定义及脚本才允许运行。
-        copy("plugins/codex/hooks/hooks.json", "hooks/hooks.json")
-        copy("plugins/codex/hooks/session_start.py", "hooks/session_start.py")
-        for name in ("hooks.json", "session_start.py"):
-            projections["hooks/" + name] = {"source": "plugins/codex/hooks/" + name, "transform": "identity"}
-    if host == "antigravity":
-        # AGY CLI 从插件根的 hooks.json 发现处理器，并以插件根作为工作目录。
-        # 保留原始来源和投影，使离线候选与本地安装源能校验实际执行的字节。
-        for name, target in (("hooks.json", "hooks.json"), ("write_guard.py", "hooks/write_guard.py"),
-                             ("guard_command.py", "hooks/guard_command.py")):
-            source_name = "plugins/antigravity/" + name
-            copy(source_name, target)
-            projections[target] = {"source": source_name, "transform": "identity"}
-        # AGY官方默认发现的always-on入口属于插件rules目录，不修改项目AGENTS。
-        # 只给主会话已有Skill的入口；角色正文继续约束Worker，不能把它变成PM。
-        result["rules/AGENTS.md"] = main_context
-        projections["rules/AGENTS.md"] = {"source": "plugins/main-session-context.md",
-                                           "transform": "antigravity-main-session-route-v1"}
     template = "plugins/" + host + "/plugin.json.in"
-    manifest = json.loads(read_source(source, template).decode("utf-8").replace("@PLUGIN_VERSION@", version).replace("@PLUGIN_NAME@", PLUGIN_NAME))
+    template_body = _read_host_source(source, template)
+    manifest = json.loads(template_body.decode("utf-8").replace("@PLUGIN_VERSION@", version).replace("@PLUGIN_NAME@", PLUGIN_NAME))
     validate_manifest(host, manifest, version)
-    source_files[template] = digest(read_source(source, template))
-    result[MANIFESTS[host]] = json_bytes(manifest)
+    source_files[template] = digest(template_body)
+    result[profile["manifest_target"]] = json_bytes(manifest)
+    # 安装后无需原始构建配置。唯一组装入口参与 payload 摘要，运行时与现有
+    # 官方清单及物理包根一起校验，业务命令参数无法改变此宿主选择。
+    result[HOST_ADAPTER_ENTRY] = json_bytes(
+        {"schema_version": 1, "host": host, "manifest_target": profile["manifest_target"]})
     # workflow-sources只列原样存在于包内的规范路径。模板和重命名手册留在外层
     # provenance，避免resolver把源仓专用路径误当作可读取的安装资源。
     files = {relative: expected for relative, expected in source_files.items()

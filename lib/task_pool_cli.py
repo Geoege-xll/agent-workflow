@@ -16,6 +16,7 @@ import sys
 from lib import task_graph_records as records, task_pool
 from lib.agent_continuation import HOSTS
 from lib.dispatch_admission_cli import _project_directory
+from lib.hosts.factory import dispatch_policy
 from lib.task_graph import TaskGraphError
 
 
@@ -69,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "archive":
             result = task_pool.archive(root, args.pm_id, args.record, args.expect_sha256)
         elif args.command == "claim":
+            policy = dispatch_policy(args.pm_id)
             target = {"record": args.record, "request_id": args.request_id, "task_id": args.task_id}
             if args.title is not None and not args.register:
                 raise TaskGraphError("--title on claim requires --register")
@@ -76,15 +78,17 @@ def main(argv: list[str] | None = None) -> int:
                 # 先以同一 SHA 验证登记对象。两步之间若原件、门禁或全池占用变化，
                 # operate 会重读全部登记项并拒绝过期领取；已登记的委托仍能恢复。
                 task_pool.register(root, args.pm_id, args.record, args.expect_sha256, args.title,
-                                   dispatch_target=target)
+                                   dispatch_target=target, policy=policy)
             result = task_pool.operate(root, args.pm_id, "claim", _capacity(args), target=target,
-                                       expected=args.expect_sha256)
+                                       expected=args.expect_sha256, policy=policy)
         elif args.command == "bind":
             receipt = records.decode(records.read_record(args.receipt))
-            result = task_pool.bind(root, args.pm_id, receipt, {"host": args.host, "agent_id": args.agent_id})
+            result = task_pool.bind(root, args.pm_id, receipt, {"host": args.host, "agent_id": args.agent_id},
+                                    policy=dispatch_policy(args.pm_id, reference_host=args.host))
         else:
             receipt = records.decode(records.read_record(args.receipt))
-            result = task_pool.operate(root, args.pm_id, "release", _capacity(args), receipt=receipt, outcome=args.outcome)
+            result = task_pool.operate(root, args.pm_id, "release", _capacity(args), receipt=receipt,
+                                       outcome=args.outcome, policy=dispatch_policy(args.pm_id))
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2

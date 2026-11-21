@@ -16,7 +16,7 @@ if not __package__:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 import hashlib
 import json
@@ -537,28 +537,32 @@ def main() -> int:
     parser.add_argument("--base")
     parser.add_argument("--head")
     args = parser.parse_args()
+    # 只读命令从仓库根校验开始限制对象读取，避免部分克隆在解析引用或生成差异时补取对象。
+    object_access = local_objects_only() if args.command in ("target", "inspect") else nullcontext()
     try:
-        repo = repository(args.repo)
-        if args.command == "create":
-            if args.path is None or args.base is None:
-                raise DeliveryError("create requires --path and an exact --base")
-            result = create(repo, args.path, args.base)
-        elif args.command == "inspect":
-            if args.base is None or args.head is None:
-                raise DeliveryError("inspect requires exact --base and --head")
-            result = scope(repo, args.base, args.head)
-        elif args.command == "target":
-            config = settings(args.config.read_text().splitlines()) if args.config else settings([])
-            branch = target_branch(repo, config["target_branch"])
-            result = {"target_branch": branch, "target_base": git(repo, "rev-parse", f"refs/heads/{branch}").decode().strip()}
-        else:
-            if args.config is None:
-                raise DeliveryError("merge commands require the project adapter --config")
-            payload = json.loads(args.input.read_text() if args.input else sys.stdin.read())
-            if not isinstance(payload, dict):
-                raise DeliveryError("delivery input must be an object")
-            operation = merge if args.command == "merge" else merge_check
-            result = operation(repo, args.config, payload)
+        with object_access:
+            repo = repository(args.repo)
+            if args.command == "create":
+                if args.path is None or args.base is None:
+                    raise DeliveryError("create requires --path and an exact --base")
+                result = create(repo, args.path, args.base)
+            elif args.command == "inspect":
+                if args.base is None or args.head is None:
+                    raise DeliveryError("inspect requires exact --base and --head")
+                result = scope(repo, args.base, args.head)
+            elif args.command == "target":
+                config = settings(args.config.read_text().splitlines()) if args.config else settings([])
+                branch = target_branch(repo, config["target_branch"])
+                base = git(repo, "rev-parse", f"refs/heads/{branch}").decode().strip()
+                result = {"target_branch": branch, "target_base": base}
+            else:
+                if args.config is None:
+                    raise DeliveryError("merge commands require the project adapter --config")
+                payload = json.loads(args.input.read_text() if args.input else sys.stdin.read())
+                if not isinstance(payload, dict):
+                    raise DeliveryError("delivery input must be an object")
+                operation = merge if args.command == "merge" else merge_check
+                result = operation(repo, args.config, payload)
     except (DeliveryError, WorktreePolicyError, TaskGraphError, QAHandoffError, TaskSourceError,
             OSError, UnicodeError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)

@@ -392,6 +392,39 @@ class PackagedTaskPoolTest(unittest.TestCase):
             self.assertIn("native-bound Reviewer", error["error"])
             self.assertEqual(row["sha256"], digest(qa))
 
+    def test_non_antigravity_packages_validate_native_history_without_native_modules(self):
+        host = "antigravity"
+        original = self.register(host, "history", "已有 AGY 任务", light=True)
+        claim = self.claim(host, self.locate(host, "已有 AGY 任务"))
+        self.assertIn("dispatch_marker", claim)
+        value = json.loads(original.read_bytes())
+        task = value["task"]
+        child = str(uuid4())
+        task["agent_ref"] = {"host": host, "agent_id": child}
+        original.write_text(json.dumps(value), encoding="utf-8")
+        before = original.read_bytes()
+
+        # 使用同一个在途旧格式原件。从两个独立包真实运行核验及恢复，
+        # 即使没有 AGY 解释器也要识别任务占用和有效身份，并拒绝相同父子 UUID。
+        modules = ("lib/hosts/antigravity_dispatch.py", "lib/hosts/antigravity_handoff.py", "hooks/write_guard.py")
+        for other in ("codex", "claude"):
+            with self.subTest(host=other):
+                self.assertTrue(all(not (self.plugins[other] / name).exists() for name in modules))
+                self.assertEqual("valid", self.invoke(other, GRAPH, "validate", "--input", original)["status"])
+                self.pool(other, "register", "--record", original, "--expect-sha256", digest(original),
+                          "--title", "已有 AGY 任务")
+                row = self.locate(other, "已有 AGY 任务")
+                self.assertEqual(("RUNNING", True, child), (row["state"], row["active"], row["agent_ref"]["agent_id"]))
+                self.assertEqual(before, original.read_bytes())
+                try:
+                    task["agent_ref"]["agent_id"] = task["antigravity_claim"]["parent"]
+                    original.write_text(json.dumps(value), encoding="utf-8")
+                    invalid = self.invoke(other, GRAPH, "validate", "--input", original, code=2)
+                    self.assertIn("child conversation UUID", invalid["error"])
+                finally:
+                    task["agent_ref"]["agent_id"] = child
+                    original.write_bytes(before)
+
     def test_antigravity_light_example_validates_and_claims_from_the_installed_guide(self):
         host = "antigravity"
         installed = self.plugins[host]
@@ -421,15 +454,16 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual("claimed", result["status"])
         self.assertRegex(result["dispatch_marker"], r"^XY-WORKFLOW-CLAIM [0-9a-f]{64}$")
 
-    def agy_log(self, identifier, *events):
+    def agy_log(self, identifier, *events, short_events=None):
         location = self.workspace / "brain" / identifier / ".system_generated" / "logs"
         location.mkdir(parents=True, exist_ok=True)
-        body = "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events)
-        for name in ("transcript.jsonl", "transcript_full.jsonl"):
+        for name, rows in (("transcript.jsonl", events if short_events is None else short_events),
+                           ("transcript_full.jsonl", events)):
+            body = "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in rows)
             (location / name).write_text(body, encoding="utf-8")
         return location / "transcript_full.jsonl"
 
-    def hook_decision(self, transcript, tool, args, user="请直接修改并验证"):
+    def hook_decision(self, transcript, tool, args, user="请直接修改并验证", *, with_reason=False):
         plugin = self.plugins["antigravity"]
         # 唯一替身是临时宿主 brain 物理根；保留实际包内 stdin/stdout 入口、原生
         # 结构校验、工作区外安装路径、任务池状态、执行目录和子会话识别的完整链路。
@@ -450,7 +484,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         value = json.loads(result.stdout)
         self.assertLessEqual(set(value), {"decision", "reason"})
-        return value["decision"]
+        return value if with_reason else value["decision"]
 
     def test_antigravity_pretool_pm_current_request_and_preparation(self):
         pm = self.agy_pm.split(":")[1]
@@ -469,13 +503,70 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual(0, subprocess.run(["git", "check-ignore", "-q", str(scratch / "task.json")],
                                            cwd=self.project, env=self.env).returncode)
         target = scratch / "task.json"
-        helper = (f"bash {plugin}/lib/python_runtime.sh -B -X utf8 {plugin}/plugins/source_pack.py "
-                  f"helper --project {self.project} {GRAPH}")
+        source_pack = f"bash {plugin}/lib/python_runtime.sh -B -X utf8 {plugin}/plugins/source_pack.py"
+        prefix = f"{source_pack} helper --project {self.project}"
+        helper = f"{prefix} {GRAPH}"
+        usage = f"{prefix} lib/delivery/native_usage.py --host antigravity"
+        prototype = f"{prefix} lib/documents/validate_prototype_workspace.py"
+        feedback = f"{prefix} lib/documents/prototype_feedback_cli.py"
+        worktree = f"{prefix} lib/delivery/worktree_cli.py"
+        capabilities = f"{prefix} lib/hosts/capabilities.py --platform antigravity"
+        git_show = "git --no-pager --no-lazy-fetch show --no-ext-diff --no-textconv"
+        outside = self.workspace / "outside-private"
+        subprocess.run(["git", "init", "-q", str(outside)], check=True, env=self.env)
         for command, result in (
                 ("pwd", "allow"), ("git log -n 5 --oneline && git status", "allow"),
+                (f"git --no-pager -C {self.project} status --short", "allow"),
+                ("git -C src status --short", "allow"),
                 ("rg -n total src | head -n 30", "allow"), ("git status && touch src/no.txt", "deny"),
                 ("find . -maxdepth 3 -type f -name '*dispatch*'", "allow"),
                 ("find . -name '*.py' -delete", "deny"), ("find . -name *dispatch*", "deny"),
+                (r"rg -n '\btotal\b' --no-ignore --max-depth 2 --glob '*.py' src 2>/dev/null", "allow"),
+                ("rg --files --max-depth=2 --glob='*.py' --no-ignore", "allow"),
+                (r"rg -n \btotal src 2>/dev/null", "deny"),
+                (r'rg -n "\btotal" src 2>/dev/null', "deny"),
+                ("rg --max-depth --no-ignore src", "deny"), ("rg --glob *.py src", "deny"),
+                ("rg --no-ignore --pre touch src", "deny"),
+                ("rg total src 2>/dev/null && touch src/no.txt", "deny"),
+                ("rg total src 2>src/fixture.txt", "deny"), ("rg total src 1>/dev/null", "deny"),
+                ("rg total src 2>/dev/null > src/no.txt", "deny"),
+                ("rg total src & 2>/dev/null", "deny"), ("git show HEAD", "deny"),
+                ("git --no-pager show --no-ext-diff --no-textconv HEAD", "deny"),
+                (f"{git_show} HEAD:README.md", "allow"),
+                ("git --no-pager --no-lazy-fetch -C src show --no-ext-diff --no-textconv HEAD", "allow"),
+                (f"{git_show} --output=src/fixture.txt HEAD", "deny"),
+                ("git -c core.pager=cat --no-pager --no-lazy-fetch show --no-ext-diff --no-textconv HEAD", "deny"),
+                ("GIT_NO_LAZY_FETCH=1 git --no-pager show --no-ext-diff --no-textconv HEAD", "deny"),
+                (f"{capabilities} ", "allow"), (f"{capabilities} --probe-version", "deny"),
+                (f"{usage} --input {target} --input usage.jsonl", "allow"),
+                (f"{usage} --input {self.workspace}/another-session.json", "deny"),
+                (f"{usage} --input usage.jsonl --output arbitrary.log", "deny"),
+                (f"{prototype} {self.project} ui --standalone --adapter project.yaml "
+                 "--page first.html --page second.html --json", "allow"),
+                (f"{prototype} {self.workspace} ui --json", "deny"),
+                (f"{prototype} {self.project} ../ui --json", "deny"),
+                (f"{feedback} status --root {self.project} --request-id current", "allow"),
+                (f"{feedback} status --root {self.workspace} --request-id current", "deny"),
+                (f"{feedback} status --root {self.project} --request-id current --data-dir {self.workspace}", "deny"),
+                (f"{feedback} validate --root {self.project} --adapter project.yaml --input {target}", "allow"),
+                (f"{feedback} migration-preview --root {self.project} --adapter project.yaml --plan docs/plans/a.md "
+                 "--pages ui/a.html ui/b.html --request-id current", "allow"),
+                (f"{feedback} migration-preview --root {self.project} --adapter project.yaml "
+                 "--plan docs/plans/a.md --request-id current --confirm-no-active-use", "deny"),
+                (f"{feedback} stop --root {self.project} --request-id current", "deny"),
+                (f"{feedback} prepare-delivery --root {self.project} --adapter project.yaml --pages ui/a.html", "deny"),
+                (f"{worktree} target --repo {self.project} --config project.yaml", "allow"),
+                (f"{worktree} inspect --repo {self.project} --base {'0' * 40} --head {'1' * 40}", "allow"),
+                (f"{worktree} inspect --repo {self.workspace} --base base --head head", "deny"),
+                (f"{worktree} merge-ready --repo {self.project} --config project.yaml --input {target}", "deny"),
+                (f"{worktree} create --repo {self.project} --path {self.workspace}/new --base HEAD", "deny"),
+                (f"{source_pack} selected-skills check", "allow"),
+                (f"{source_pack} xy-web-guidance -- search 'dialog keyboard'", "allow"),
+                (f"{source_pack} xy-web-guidance -- install", "deny"),
+                (f"{source_pack} apple-skills check", "allow"),
+                (f"{source_pack} apple-skills check --developer-dir {self.workspace}", "deny"),
+                (f"{source_pack} xy-playwright -- open http://localhost:1234", "deny"),
+                (f"{prefix} lib/delivery/qa_handoff_cli.py schema --output {target}", "deny"),
                 ("mkdir -p docs/plans", "allow"),
                 ("git diff --output=src/other.txt", "deny"), ("echo changed > src/fixture.txt", "deny"),
                 ("python3 -c 'print(1)'", "deny"), ("mkdir -p src/new", "deny"),
@@ -484,6 +575,36 @@ class PackagedTaskPoolTest(unittest.TestCase):
                 (f"{helper} task --input {target} --task-id api --output {scratch}/../outside.json", "deny")):
             with self.subTest(command=command):
                 self.assertEqual(result, self.hook_decision(log, "run_command", {"CommandLine": command}))
+        for tool, args, reason in (
+                ("run_command", {"CommandLine": "git add src/private.txt"}, "拒绝此命令形式"),
+                ("write_file", {"Path": str(self.workspace / "private.txt")}, "目标路径"),
+                ("write_file", {"Path": "src/private.txt"}, "未找到 PM")):
+            outcome = self.hook_decision(log, tool, args, with_reason=True)
+            self.assertEqual("deny", outcome["decision"])
+            self.assertIn(reason, outcome["reason"])
+            self.assertNotIn("private.txt", outcome["reason"])
+        # 路径越界与命令形态失败分别报告。现有 Git 查询、复合只读命令、
+        # 终端 Cwd 与 helper 的二次选根都经相同的脱敏路径拒绝分支。
+        for details in (
+                {"CommandLine": f"git --no-pager -C {outside} status"},
+                {"CommandLine": f"pwd && git -C {outside} diff --stat"},
+                {"CommandLine": "git -C ../outside-private log --oneline"},
+                {"CommandLine": f"git --no-pager --no-lazy-fetch -C {outside} "
+                                "show --no-ext-diff --no-textconv HEAD"},
+                {"CommandLine": "pwd", "Cwd": str(outside)},
+                {"CommandLine": "pwd", "Cwd": "../outside-private"},
+                {"CommandLine": f"{source_pack} helper --project {outside} lib/hosts/capabilities.py "
+                                "--platform antigravity"},
+                {"CommandLine": f"{worktree} target --repo {outside}"},
+                {"CommandLine": f"{prototype} {outside} ui --json"},
+                {"CommandLine": f"{usage} --input {outside}/usage-private.json"}):
+            with self.subTest(details=details):
+                outcome = self.hook_decision(log, "run_command", details, with_reason=True)
+                self.assertEqual("deny", outcome["decision"])
+                self.assertIn("目标路径的工作区归属", outcome["reason"])
+                self.assertNotIn("outside-private", outcome["reason"])
+                self.assertNotIn("usage-private.json", outcome["reason"])
+                self.assertNotIn(details["CommandLine"], outcome["reason"])
         for path, prompt, result in (
                 (str(target), "准备任务包", "allow"), (str(scratch / "test_payload.py"), "准备任务包", "deny"),
                 ("docs/plans/release.md", "准备计划", "allow"),
@@ -542,6 +663,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual("deny", self.hook_decision(log, "edit_file", {"Path": str(linked)}))
         self.assertEqual("deny", self.hook_decision(log, "run_command", {"CommandLine":
             f"{helper} task --input {target} --task-id api --output {linked}"}))
+        self.assertEqual("deny", self.hook_decision(log, "run_command", {"CommandLine": f"{usage} --input {linked}"}))
 
     def test_antigravity_pretool_writer_before_binding_and_read_only_role(self):
         host = "antigravity"
@@ -572,21 +694,31 @@ class PackagedTaskPoolTest(unittest.TestCase):
             "content": "\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender=" + pm
                        + " priority=MESSAGE_PRIORITY_HIGH content=" + marker + "\n实现当前任务\n</SYSTEM_MESSAGE>",
         })
-        def dispatch(role):
-            call = {"name": "invoke_subagent", "args": {"TypeName": json.dumps(role), "Prompt": json.dumps(marker)}}
+        def dispatch(role, receipt_fields=None):
+            # 真长提示词在 1.5.13 的短日志中丢失独立标记。Hook 必须使用完整日志
+            # 的原始字符串参数，且创建回执里的子 URI 仍按短日志定位。
+            call = {"name": "invoke_subagent", "args": {"TypeName": role, "Prompt": "完整任务包\n" * 1200 + marker}}
             receipt = {"conversationId": child, "logAbsoluteUri": child_log.with_name("transcript.jsonl").as_uri(),
                        "workspaceUris": [self.project.as_uri()]}
-            return self.agy_log(pm, {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"},
-                         {"step_index": 1, "source": "MODEL", "status": "DONE",
-                              "type": "PLANNER_RESPONSE", "tool_calls": [call]},
-                         {"step_index": 2, "source": "MODEL", "status": "DONE", "type": "GENERIC",
-                          "content": "Created the following subagent:\n" + json.dumps(receipt)
-                          + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
-                            "There is no need to poll for its response."})
+            start = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"}
+            planner = {"step_index": 1, "source": "MODEL", "status": "DONE",
+                       "type": "PLANNER_RESPONSE", "tool_calls": [call]}
+            short = {**planner, "truncated_fields": ["tool_calls"],
+                     "tool_calls": [{"name": "invoke_subagent", "args": {"TypeName": json.dumps(role),
+                                                                         "Prompt": json.dumps("完整任务包")}}]}
+            created = {"step_index": 2, "source": "MODEL", "status": "DONE", "type": "GENERIC",
+                       "content": "Created the following subagent:\n" + json.dumps(receipt)
+                       + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
+                         "There is no need to poll for its response."}
+            if receipt_fields is not None:
+                created["truncated_fields"] = receipt_fields
+            return self.agy_log(pm, start, planner, created, short_events=(start, short, created))
         parent_log = dispatch("xy-backend")
         self.assertNotIn("agent_ref", task_in(path))
         self.assertEqual("allow", self.hook_decision(child_log, "edit_file", {"Path": "src/fixture.txt"}))
-        self.assertEqual("deny", self.hook_decision(child_log, "edit_file", {"Path": "src/other.txt"}))
+        violation = self.hook_decision(child_log, "edit_file", {"Path": "src/other.txt"}, with_reason=True)
+        self.assertEqual("deny", violation["decision"])
+        self.assertIn("已核对实现派发", violation["reason"])
         for current in (parent_log, child_log):
             self.assertEqual("allow", self.hook_decision(current, "run_command", {"CommandLine": "python3 test_total.py"}))
             self.assertEqual("allow", self.hook_decision(current, "run_command", {"CommandLine": "python -B test_total.py"}))
@@ -598,7 +730,18 @@ class PackagedTaskPoolTest(unittest.TestCase):
                 with self.subTest(actor=current, command=cmd, directory=subdir):
                     self.assertEqual(allowed, self.hook_decision(current, "run_command", {
                         "CommandLine": cmd, "Cwd": str(self.project / subdir)}))
-        dispatch("xy-qa")
-        self.assertEqual("deny", self.hook_decision(child_log, "edit_file", {"Path": "src/fixture.txt"},
-                                                    "这次由主会话亲自改"))
+        for role, receipt_fields in (("xy-backend", ["content"]), ("xy-qa", None)):
+            dispatch(role, receipt_fields)
+            refusal = self.hook_decision(child_log, "edit_file", {"Path": "src/fixture.txt"},
+                                         "这次由主会话亲自改", with_reason=True)
+            self.assertEqual("deny", refusal["decision"])
+            self.assertIn("无法核对当前子会话的可写派发", refusal["reason"])
         self.assertEqual("allow", self.hook_decision(child_log, "run_command", {"CommandLine": "git diff --stat"}))
+        # 宿主声明摘要变化后，原生入口应回有效 deny，包括原来无需解析会话的状态查询。
+        definition = self.plugins[host] / "hooks.json"
+        original_definition = definition.read_bytes()
+        try:
+            definition.write_bytes(original_definition + b"\n")
+            self.assertEqual("deny", self.hook_decision(child_log, "manage_task", {"Action": "status"}))
+        finally:
+            definition.write_bytes(original_definition)

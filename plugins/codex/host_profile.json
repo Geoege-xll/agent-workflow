@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "host": "codex",
+  "manifest_target": ".codex-plugin/plugin.json",
+  "resource_context_source": "plugins/plugin-context.md",
+  "role_projection": "codex-native-templates",
+  "resources": [
+    {"source": "plugins/codex/native-agent-context.md", "target": "plugins/codex/native-agent-context.md"},
+    {"source": "plugins/maintenance/skills/xy-config/agents/openai.yaml", "target": "skills/xy-config/agents/openai.yaml"},
+    {"source": "plugins/codex/hooks/hooks.json", "target": "hooks/hooks.json"},
+    {"source": "plugins/codex/hooks/session_start.py", "target": "hooks/session_start.py"}
+  ]
+}

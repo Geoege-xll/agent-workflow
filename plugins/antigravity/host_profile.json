@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "host": "antigravity",
+  "manifest_target": ".antigravity-plugin/plugin.json",
+  "resource_context_source": "plugins/antigravity/plugin-context.md",
+  "role_projection": "native-agents",
+  "resources": [
+    {"source": "plugins/antigravity/hooks.json", "target": "hooks.json"},
+    {"source": "plugins/antigravity/write_guard.py", "target": "hooks/write_guard.py"},
+    {"source": "plugins/antigravity/guard_command.py", "target": "hooks/guard_command.py"},
+    {"source": "lib/hosts/antigravity_dispatch.py", "target": "lib/hosts/antigravity_dispatch.py"},
+    {"source": "lib/hosts/antigravity_handoff.py", "target": "lib/hosts/antigravity_handoff.py"},
+    {"source": "plugins/main-session-context.md", "target": "rules/AGENTS.md", "transform": "main-session-rules"}
+  ]
+}
