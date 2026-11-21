@@ -1,6 +1,6 @@
-# xy-workflow 3.0.9
+# xy-workflow 3.1.0
 
-本包为 `xy-workflow 3.0.9`，当前工作树配套 Native Agent Config `0.1.8` 离线候选。版本来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`，维护入口根据包内组件描述校验下载来源和摘要。正式安装使用 Git stable 来源和 GitHub Release，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [安装说明](INSTALL.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
+本包为 `xy-workflow 3.1.0`，配套 Native Agent Config `0.1.8`。版本来自 `product/PLUGIN_VERSION` 和 `native_config/VERSION`，维护入口根据包内组件描述校验下载来源和摘要。正式安装使用 Git stable 来源和 GitHub Release，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [安装说明](INSTALL.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
 
 ## 载荷与职责
 
