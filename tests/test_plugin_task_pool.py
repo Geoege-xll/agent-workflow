@@ -665,6 +665,48 @@ class PackagedTaskPoolTest(unittest.TestCase):
             f"{helper} task --input {target} --task-id api --output {linked}"}))
         self.assertEqual("deny", self.hook_decision(log, "run_command", {"CommandLine": f"{usage} --input {linked}"}))
 
+    def test_antigravity_design_child_can_query_one_topic_read_only(self):
+        from tests.test_plugin_workflow_contract import visual_request
+
+        host = "antigravity"
+        plugin = self.plugins[host]
+        example, _ = visual_request("UI-Page")
+        task = example["tasks"][0]
+        task.update(workflow_level="Light", state="DECLARED", blocks=[], goal="设计设置页",
+                    input_contracts=["已确认的页面需求"], output_contracts=["设置原型"],
+                    verification_commands=["检查原型页面"], acceptance_evidence=["静态核验"])
+        page = self.project / task["owned_paths"][0]
+        page.parent.mkdir(parents=True)
+        page.write_text("<main></main>", encoding="utf-8")
+        pack = {key: example[key] for key in ("schema_version", "standards_contract", "ui_contract")}
+        pack.update(task=task, request_scope="prototype_only", approved_gates=["requirements_approved"])
+        path = self.workspace / "design-pack.json"
+        path.write_text(json.dumps(pack), encoding="utf-8")
+        claim = self.pool(host, "claim", "--register", "--title", task["goal"], "--record", path,
+                          "--task-id", task["id"], "--request-id", task["request_id"],
+                          "--expect-sha256", digest(path), *CAPACITY)
+        marker = claim["dispatch_marker"]
+        pm, child = self.agy_pm.split(":")[1], str(uuid4())
+        log = self.agy_log(child, {"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+            "content": "\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender=" + pm
+                       + " priority=MESSAGE_PRIORITY_HIGH content=" + marker + "\n设计设置页\n</SYSTEM_MESSAGE>"})
+        receipt = {"conversationId": child, "logAbsoluteUri": log.with_name("transcript.jsonl").as_uri(),
+                   "workspaceUris": [self.project.as_uri()]}
+        self.agy_log(pm, {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"},
+                     {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                      "tool_calls": [{"name": "invoke_subagent", "args": {"TypeName": "xy-uiux", "Prompt": marker}}]},
+                     {"step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                      "content": "Created the following subagent:\n" + json.dumps(receipt)
+                                 + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
+                                 + "There is no need to poll for its response."})
+        self.assertEqual("allow", self.hook_decision(log, "edit_file", {"Path": str(page)}))
+        command = (f'bash "{plugin}/lib/python_runtime.sh" -B -X utf8 "{plugin}/plugins/source_pack.py" '
+                   'selected-skills query ux "error summary form validation"')
+        for suffix, expected in (("", "allow"), (" --max-results 2", "allow"), (" --max-results 21", "deny"),
+                                 (" --persist", "deny"), (" --design-system", "deny"), (f' > "{page}"', "deny")):
+            with self.subTest(suffix=suffix):
+                self.assertEqual(expected, self.hook_decision(log, "run_command", {"CommandLine": command + suffix}))
+
     def test_antigravity_pretool_writer_before_binding_and_read_only_role(self):
         host = "antigravity"
         pm = self.agy_pm.split(":")[1]

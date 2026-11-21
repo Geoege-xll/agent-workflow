@@ -27,6 +27,9 @@ xy-workflow 的 PM 适配。`xy-uiux` 固定绑定 `xy-ui-design`。交付具体
 `xy-prototype-verify`，仅维护设计规范时按文档验收。`xy-impeccable` 由当前设计需求决定是否选用。
 Claude 子代理的 skills 声明仅描述其预载配置。
 
+UI UX Pro Max 的 MIT 原版检索引擎、五个专题数据表和上游引用记录在非发现目录随包交付。
+有具体未决设计问题时，`xy-uiux` 通过同一物理插件的 `source_pack.py selected-skills query` 显式检索。沿用项目规范与 Impeccable 主设计方法。
+
 Playwright CLI采用锁定的官方发布包，不依赖用户全局命令或npm/npx临时下载；三个原包与
 原版Skill完整随包，Node仍为运行前提，浏览器复用官方匹配缓存、按已有任务授权和宿主权限准备。
 生产Web优先复用项目测试，补充交互首选 `xy-playwright`；其它浏览器需具体理由，电脑操控需

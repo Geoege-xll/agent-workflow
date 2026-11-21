@@ -188,6 +188,13 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 self.assertIn("Do not automate prototype browser operations by", design)
                 self.assertIn("Do not generate, save, attach, or present screenshots", " ".join(design.split()))
                 self.assertNotIn("ui-ux-pro-max", workflow + intake + design)
+                self.assertIn("skill-selection.md#design-topic-query", design)
+                self.assertNotIn("selected-skills query", design)
+                topic = selection.split("## Design topic query", 1)[1].split("\n## ", 1)[0]
+                for guidance in ("selected-skills query chart", "具体未决问题", "普通任务不预载语料", "失败时的回退",
+                                 "英文关键词", "`typography`", "`ux`", "`style`", "`color`"):
+                    self.assertIn(guidance, topic)
+                self.assertFalse((root / "skills/ui-ux-pro-max").exists())
                 for path in ("roles/xy-uiux.md", "product/AGENT_SCHEMA.md", "product/ROLES.yaml",
                              "product/WORKFLOW.md", "skills/xy-workflow/references/ui-design.md"):
                     self.assertNotIn("xy-impeccable", (root / path).read_text(encoding="utf-8"))

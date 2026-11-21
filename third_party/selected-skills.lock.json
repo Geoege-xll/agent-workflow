@@ -2803,6 +2803,57 @@
       "skills": {
         "playwright-cli": "runtime/node_modules/@playwright/cli/skills/playwright-cli/SKILL.md"
       }
+    },
+    "ui-ux-pro-max": {
+      "archive_sha256": "e01c12afa3c5ba4942eaa126651fb5d13537bee982eac4f2ca7185e0f6b4bd81",
+      "commit": "2de1134dc4d1cfe112934611ae5803ae17a1bd7e",
+      "files": {
+        "LICENSE": {
+          "sha256": "738f69dfa83db5c347c678fb9d90e560877059f0de93a327c39001bff92dc014",
+          "size": 1075
+        },
+        "src/ui-ux-pro-max/data/charts.csv": {
+          "sha256": "80045f5793cbeca3b1373831851c992444a38967960cbba900c1472f1420e978",
+          "size": 23682
+        },
+        "src/ui-ux-pro-max/data/colors.csv": {
+          "sha256": "f14cc97bc4c3527e6181b2ec3231704271249ca4ad56dcaa9bf562ab795a3dd7",
+          "size": 38488
+        },
+        "src/ui-ux-pro-max/data/data-provenance.json": {
+          "sha256": "d766d1afb9fcdce89dbba580161b3dad260702a18871b12ab7f762eeaf8883e8",
+          "size": 44518
+        },
+        "src/ui-ux-pro-max/data/styles.csv": {
+          "sha256": "a9b6cadbd1cb9e7cb8398a3b445e0691d01e42ed5e5efa60a5d0c08c99c8100d",
+          "size": 152958
+        },
+        "src/ui-ux-pro-max/data/typography.csv": {
+          "sha256": "321fc446e89024488ebae96dda93efc4d2307bd8bddb240857ad51364f6782c8",
+          "size": 49997
+        },
+        "src/ui-ux-pro-max/data/ux-guidelines.csv": {
+          "sha256": "9c473c1104e93f3d985f2d46d8854735e1a1deb8e0ac5ecd39c7e3b04e5d7528",
+          "size": 34991
+        },
+        "src/ui-ux-pro-max/scripts/core.py": {
+          "sha256": "caf92bdcf2579c9a7d6af4f53c54ee9d3c8f05472cfab77aaec38bef120ec63e",
+          "size": 43933
+        }
+      },
+      "license": "LICENSE",
+      "repository": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+      "resources": [
+        "src/ui-ux-pro-max/scripts/core.py",
+        "src/ui-ux-pro-max/data/data-provenance.json",
+        "src/ui-ux-pro-max/data/charts.csv",
+        "src/ui-ux-pro-max/data/ux-guidelines.csv",
+        "src/ui-ux-pro-max/data/typography.csv",
+        "src/ui-ux-pro-max/data/colors.csv",
+        "src/ui-ux-pro-max/data/styles.csv"
+      ],
+      "roots": [],
+      "skills": {}
     }
   },
   "schema_version": 1

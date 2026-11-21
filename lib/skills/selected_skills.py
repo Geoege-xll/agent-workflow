@@ -25,7 +25,16 @@ DESKTOP_BINARIES = ("agent-desktop", "agent-desktop-macos-helper")
 DESKTOP_MACOS_TARGETS = {"arm64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"}
 DESKTOP_REFERENCES = ("commands-interaction.md", "commands-observation.md", "commands-system.md", "workflows.md")
 IMPECCABLE_ROOT = "plugin/skills/impeccable"
+DESIGN_QUERY = "ui-ux-pro-max"
+DESIGN_ROOT = "src/ui-ux-pro-max"
+DESIGN_ENGINE = DESIGN_ROOT + "/scripts/core.py"
+DESIGN_TOPICS = {"chart": "charts.csv", "ux": "ux-guidelines.csv", "typography": "typography.csv",
+                 "color": "colors.csv", "style": "styles.csv"}
+DESIGN_RESOURCES = [DESIGN_ENGINE, DESIGN_ROOT + "/data/data-provenance.json",
+                    *(DESIGN_ROOT + "/data/" + name for name in DESIGN_TOPICS.values())]
 SPECS = {
+    DESIGN_QUERY: {"repository": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+                   "roots": [], "resources": DESIGN_RESOURCES, "license": "LICENSE", "skills": {}},
     "agent-desktop": {"repository": "https://github.com/vercel-labs/agent-desktop", "roots": [DESKTOP_SKILL_ROOT, "runtime/macos"], "license": "LICENSE", "skills": {"agent-desktop": DESKTOP_SKILL_ROOT + "/SKILL.md"}},
     "modern-web-guidance": {"repository": "https://github.com/GoogleChrome/modern-web-guidance-src", "roots": ["runtime"], "license": "runtime/LICENSE", "skills": {"modern-web-guidance": "runtime/skills/modern-web-guidance/SKILL.md"}},
     "grill-me": {"repository": "https://github.com/mattpocock/skills", "roots": ["skills/productivity/grill-me", "skills/productivity/grilling"], "license": "LICENSE", "skills": {"grill-me": "skills/productivity/grill-me/SKILL.md", "grilling": "skills/productivity/grilling/SKILL.md"}},
@@ -124,7 +133,7 @@ def _lock_dependencies(lock: dict) -> dict:
 def _dependency_files(name: str, item: dict) -> dict:
     spec = SPECS[name]
     provenance = {"playwright-cli": {"packages"}, "modern-web-guidance": {"package"}, "agent-desktop": {"release"},
-                  "impeccable": {"version", "archive_sha256"}}
+                  "impeccable": {"version", "archive_sha256"}, DESIGN_QUERY: {"archive_sha256"}}
     fields = set(spec) | {"commit", "files"} | provenance.get(name, set())
     if not isinstance(item, dict) or set(item) != fields:
         raise ValueError("invalid dependency contract: " + name)
@@ -134,11 +143,15 @@ def _dependency_files(name: str, item: dict) -> dict:
     required = {spec["license"], *spec["skills"].values()}
     if "notice" in spec:
         required.add(spec["notice"])
+    required.update(spec.get("resources", ()))
     if not isinstance(files, dict) or not required <= files.keys():
         raise ValueError("selected dependency is missing required entries: " + name)
     if name == "impeccable" and (not isinstance(item["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", item["version"])
                                  or not isinstance(item["archive_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", item["archive_sha256"])):
         raise ValueError("invalid Impeccable release provenance")
+    if name == DESIGN_QUERY and (set(files) != required or not isinstance(item["archive_sha256"], str)
+                                 or not re.fullmatch(r"[0-9a-f]{64}", item["archive_sha256"])):
+        raise ValueError("invalid UI UX Pro Max source or query inventory")
     return files
 
 
@@ -146,7 +159,8 @@ def _in_selected_closure(name: str, relative: str, roots: list[str]) -> bool:
     # Impeccable 只收正式插件的入口、Markdown 引用与版权文件。上游脚本即使
     # 移入 reference 目录也不应随包获得执行或读取入口。
     spec = SPECS[name]
-    if relative in (spec["license"], spec.get("notice")) or relative in spec["skills"].values():
+    if (relative in (spec["license"], spec.get("notice")) or relative in spec["skills"].values()
+            or relative in spec.get("resources", ())):
         return True
     if name == "impeccable" and not relative.endswith(".md"):
         return False
@@ -384,7 +398,8 @@ def load_git_archive(dependency: str, ref: str, archive: Path, *, archive_record
     整个归档均拒绝危险或重复路径；闭包外链接不解析/不提取，避免把上游仓库的
     AGENTS别名当依赖。选中闭包的链接和特殊节点仍明确失败。
     """
-    archive_prefixes = {"grill-me": "skills-", "impeccable": "impeccable-", "agent-desktop": "agent-desktop-"}
+    archive_prefixes = {"grill-me": "skills-", "impeccable": "impeccable-", "agent-desktop": "agent-desktop-",
+                        DESIGN_QUERY: "ui-ux-pro-max-skill-"}
     if dependency not in archive_prefixes:
         raise ValueError("Git archive supports only the selected Git dependencies")
     body = read_regular(archive.parent, archive.name, max_bytes=200 * 1024 * 1024)
@@ -422,6 +437,8 @@ def load_git_archive(dependency: str, ref: str, archive: Path, *, archive_record
     item = {**spec, "commit": ref, "files": inventory}
     if dependency == "impeccable":
         item.update(version=_impeccable_version(files.get(spec["skills"]["impeccable"], b"")), archive_sha256=digest)
+    elif dependency == DESIGN_QUERY:
+        item["archive_sha256"] = digest
     return item, files, digest, ignored
 
 
@@ -520,6 +537,30 @@ def skill_path(name: str) -> str:
     raise ValueError("unknown selected skill")
 
 
+def locked_dependency(root: Path, dependency: str, verify_source: Callable[[str, str], None] | None) -> dict:
+    """分页和专题检索都只读取一次来源锁，并独立绑定本次要消费的依赖。"""
+    raw_lock = read_regular(root, LOCK, max_bytes=16 * 1024 * 1024)
+    if verify_source is not None:
+        verify_source(LOCK, hashlib.sha256(raw_lock).hexdigest())
+    item = _lock_dependencies(json.loads(raw_lock, object_pairs_hook=unique_object))[dependency]
+    _dependency_files(dependency, item)
+    return item
+
+
+def locked_file(root: Path, dependency: str, item: dict, relative: str,
+                verify_source: Callable[[str, str], None] | None) -> tuple[bytes, str]:
+    record = item["files"][relative]
+    _validate_file_record(dependency, relative, record)
+    path = f"{VENDOR}/{dependency}/{relative}"
+    body = read_regular(root, path, max_bytes=record["size"])
+    digest = hashlib.sha256(body).hexdigest()
+    if len(body) != record["size"] or digest != record["sha256"]:
+        raise ValueError("selected skill digest mismatch: " + path)
+    if verify_source is not None:
+        verify_source(path, digest)
+    return body, digest
+
+
 def read_selected_chunk(root: Path, name: str, offset: int, length: int, *, reference: str | None = None,
                         verify_source: Callable[[str, str], None] | None = None) -> dict:
     """读取指定上游正文的一页；锁、正文各读取一次，包内调用同时校验发行清单摘要。
@@ -535,18 +576,8 @@ def read_selected_chunk(root: Path, name: str, offset: int, length: int, *, refe
             raise ValueError("expected an Impeccable reference/*.md path")
         relative = IMPECCABLE_ROOT + "/" + reference
         path = VENDOR + "/" + dependency + "/" + relative
-    raw_lock = read_regular(root, LOCK, max_bytes=16 * 1024 * 1024)
-    if verify_source is not None:
-        verify_source(LOCK, hashlib.sha256(raw_lock).hexdigest())
-    item = _lock_dependencies(json.loads(raw_lock, object_pairs_hook=unique_object))[dependency]
-    record = _dependency_files(dependency, item)[relative]
-    _validate_file_record(dependency, relative, record)
-    body = read_regular(root, path, max_bytes=record["size"])
-    digest = hashlib.sha256(body).hexdigest()
-    if len(body) != record["size"] or digest != record["sha256"]:
-        raise ValueError("selected skill digest mismatch: " + path)
-    if verify_source is not None:
-        verify_source(path, digest)
+    item = locked_dependency(root, dependency, verify_source)
+    body, digest = locked_file(root, dependency, item, relative, verify_source)
     return read_bytes_chunk(body, path, offset, length, digest=digest)
 
 
@@ -593,6 +624,10 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT,
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check")
     commands.add_parser("diagnose")
+    query = commands.add_parser("query", help="read-only UI UX Pro Max topic search", allow_abbrev=False)
+    query.add_argument("domain", choices=DESIGN_TOPICS)
+    query.add_argument("keywords", help="specific keywords from the English design corpus")
+    query.add_argument("--max-results", type=int, choices=range(1, 21), metavar="1..20", default=3)
     read = commands.add_parser("read")
     read.add_argument("skill", help="public alias or canonical upstream skill name")
     read.add_argument("--reference", help="read a locked Impeccable Markdown reference, e.g. reference/layout.md")
@@ -600,6 +635,15 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT,
     read.add_argument("--length", type=int, default=12000)
     args = parser.parse_args(argv)
     try:
+        if args.command == "query":
+            if __package__:
+                from .ui_ux_pro_max import search
+            else:
+                sys.path.insert(0, str(ROOT))
+                from lib.skills.ui_ux_pro_max import search
+            result = search(root, args.domain, args.keywords, args.max_results, verify_source)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
         if args.command == "read":
             result = read_selected_chunk(root, args.skill, args.offset, args.length,
                                          reference=args.reference, verify_source=verify_source)

@@ -812,6 +812,47 @@ class PluginDeliveryTest(unittest.TestCase):
                 finally:
                     source.write_bytes(original)
 
+    def test_detached_topic_query_uses_the_locked_engine_and_selected_data(self):
+        project = self.root / "design-query-project"
+        project.mkdir()
+        expected = (("chart", "trend over time", "Best Chart Type", "Line Chart"),
+                    ("ux", "error summary form validation", "Issue", "Focusable Error Summary"),
+                    ("typography", "accessible readable dashboard", "Font Pairing Name", "Dashboard Data"),
+                    ("style", "Minimalism & Swiss Style", "Style ID", "minimalism-and-swiss-style"),
+                    ("color", "SaaS dashboard", "Product Type", "Micro SaaS"))
+        for host, root in self.installed.items():
+            entry = ["bash", str(root / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                     str(root / "plugins/source_pack.py"), "selected-skills", "query"]
+            def invoke(*args):
+                return subprocess.run([*entry, *args], cwd=project, capture_output=True, text=True, timeout=20)
+
+            for domain, keywords, field, value in expected:
+                with self.subTest(host=host, topic=domain):
+                    result = invoke(domain, keywords, "--max-results", "1")
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    answer = json.loads(result.stdout)
+                    self.assertEqual((domain, 1, value), (answer["domain"], answer["count"], answer["results"][0][field]))
+                    self.assertEqual(hashlib.sha256((root / answer["source"]["path"]).read_bytes()).hexdigest(),
+                                     answer["source"]["sha256"])
+            for extra in ("--persist", "--design-system", "--preview"):
+                self.assertEqual(2, invoke("chart", "time series", extra).returncode)
+        self.assertEqual([], list(project.iterdir()))
+
+        # 分别篡改已交付的适配器、上游函数、实际选中的数据；三者都必须先于执行/输出拒绝。
+        # 读另一专题时只依赖它自己的 CSV，语料缺损也不能启动其它设计方法替代。
+        vendor = root / "third_party/selected-skills/ui-ux-pro-max/src/ui-ux-pro-max"
+        for target in (root / "lib/skills/ui_ux_pro_max.py", vendor / "scripts/core.py", vendor / "data/charts.csv"):
+            body = target.read_bytes()
+            try:
+                target.write_bytes(body + b"\n")
+                result = invoke("chart", "time series")
+                self.assertEqual((2, ""), (result.returncode, result.stdout))
+                self.assertIn(target.name, result.stderr)
+                if target.suffix == ".csv":
+                    self.assertEqual(0, invoke("ux", "form validation").returncode)
+            finally:
+                target.write_bytes(body)
+
     def test_selected_skills_are_complete_detached_and_do_not_register_upstream_hooks(self):
         """真实三端载荷消费同一原文，连续读取覆盖全部字节，绝不执行原版脚本。"""
         from lib.skills.selected_skills import DESKTOP_SKILL_ROOT, LOCK, VENDOR, snapshot, skill_path

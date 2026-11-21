@@ -44,6 +44,7 @@
 - REQ-322：在另一台电脑首次安装 Claude 插件时，使用官方市场与用户级安装，并让该电脑用户一次选择是否保存限定范围的 Auto 来源说明。多个项目和同源重复安装复用这一选择。验收覆盖干净用户目录、已有设置、拒绝、同名不同来源及第二个项目。
 - REQ-323：Claude 首次需要运行本地插件工具时，先按官方登记核实安装来源、版本与实际目录。仅需消费精选技能正文时使用已校验的当前来源，避免整包重复扫描。来源变化或权限拒绝后遵循宿主判断。用隔离注册安装的原型委托核对实际行为。
 - REQ-324：三个宿主的 `xy-uiux` 可按需选用 `xy-impeccable`。随包保留官方正式分发的 Markdown 原文、适用参考、Apache-2.0 LICENSE 与 NOTICE.md。按文件验证来源及摘要后分页读取，本入口仅用于离线设计方法；原型沿用既有静态验证。候选删除原 Taste 入口及其资源。
+- 在 3.1.0 开发分支上，设计者仅为具体未决问题查询 UI UX Pro Max 的图表、UX、字体、配色或样式专题。项目规范优先，Impeccable 继续提供主要设计方法。三端按同一参数离线检索，保留默认角色预载与原型静态验收。
 
 保留合同：用户再次明确“文档记忆优先，配合 agentmemory”。现有可选增强、按需召回、严格项目隔离与溯源、文档和明确批准优先的合同不删除。独立只读评估确认本项目 ID 仍是模板占位符，当前工具注册信息尚不足以证明服务端项目隔离，因此本轮不召回／保存、不声称已实际使用；这不阻断工作流或精选技能交付，也不转化为安装／重构记忆服务任务。
 
@@ -69,6 +70,14 @@ Playwright 追加采用官方已发布 @playwright/cli@0.1.24 及其精确的 pl
 运行时通过 NO_UPDATE_NOTIFIER=1 禁止隐式 npm 更新查询，通过已核实的 PLAYWRIGHT_SKIP_BROWSER_GC=1 保留其他浏览器缓存。不会使用外层 CLI 不接受的 --no-remove，也不执行卸载或全会话清理。浏览器默认通道、固定 revision 与准备命令以本轮固定源码合同为准；首次运行不能把不同版本的缓存冒充匹配。
 
 ### 上游与官方资料
+
+UI UX Pro Max 取自[固定官方提交](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill/tree/2de1134dc4d1cfe112934611ae5803ae17a1bd7e)，源码归档 SHA-256 为 `e01c12afa3c5ba4942eaa126651fb5d13537bee982eac4f2ca7185e0f6b4bd81`。原版 `core.py`、五张 CSV、根 MIT 许可证（© 2024 Next Level Builder）与 `data-provenance.json` 保持上游字节。来源记录保留图表的 IBM Carbon、表单的 GOV.UK Design System 与 W3C、字体搭配的 Google Fonts CSS API 及平台样式等引用。字体搭配只提供名称与链接，包中没有字体文件。
+
+更新时核对目标提交与官方归档摘要，用现有脚本生成候选，核对查询结果、来源及传递署名后再采纳：
+
+```text
+bash lib/python_runtime.sh -B scripts/update_selected_skills.py --dependency ui-ux-pro-max --ref <full-commit> --archive <official.tar.gz> --output <new-review-directory>
+```
 
 - Grill Me：https://github.com/mattpocock/skills
 - Impeccable 正式分发来源：[锁定提交](https://github.com/pbakaus/impeccable/tree/b49177d32788f2dc585c42831d845dacf1ebed2c/plugin/skills/impeccable)

@@ -93,6 +93,8 @@ Codex／Claude 提供用户级和项目级工作流启停、恢复继承；AGY �
 
 工作树候选内置 Grill Me、需求访谈 primitive、Impeccable 离线设计方法和 Playwright CLI，分别通过 `xy-grill-me`、`xy-grilling`、`xy-impeccable`、`xy-playwright` 访问。`xy-uiux` 可按任务需要离线读取 Impeccable 原文和参考。原版资源、许可与薄适配分开维护；不要求另装全局 Skill 或 CLI。原有工作流方法保持，所有角色也可按任务使用宿主实际提供的其他技能。
 
+项目已采用的规范优先，Impeccable 是主要外部设计方法。遇到具体的图表、表单错误与无障碍、字体、配色或样式问题时，设计角色可用同包 UI UX Pro Max 离线查询一个专题。用法与示例见[专题查询](platforms/shared/skills/xy-workflow/references/skill-selection.md#design-topic-query)。
+
 新增 `xy-web-guidance` 和 `xy-apple-guidance` **可发现、按条件推荐，不进入角色无条件预载**。前者随包提供 GoogleChrome 官方固定版本的完整现代 Web 指导与离线查询，查询需要已有 Node 22+；后者只读使用本机 Xcode 官方 SwiftUI 指导，当前验证边界为观察到的 Xcode 27.x 布局，不再分发 Apple 正文。详见[角色技能主题](docs/plans/role-skill-routing.md)。
 
 项目知识从两个薄目录进入。PROJECT 的「主题目录」按能力或长期决定链接原文，STANDARDS 按适用范围链接项目特有规范。一个主题只维护一份 Markdown，先写当前行为，再按需补充本轮要求、交互和证据。已知目标时可直接读对应章节。普通目录链接用于导航，已验收声明须有真实批准与验收证据。Full 批准稿在首次派发前保存；纯执行或纯符合性修复可复用请求的持久交接，长期业务事实才进入计划目录。参见[计划生命周期](platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)。

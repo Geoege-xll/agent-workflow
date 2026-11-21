@@ -109,7 +109,7 @@ Changed source fingerprints require a fresh check rather than combining bytes fr
 
 ## Impeccable design guidance
 
-`xy-uiux` 在当前获准设计任务确有设计方法缺口时，可按需选用提供离线方法的 `xy-impeccable`。沿用现有
+`xy-uiux` 在当前获准设计任务确有设计方法缺口时，以 `xy-impeccable` 为主要外部设计方法，按需离线读取。沿用现有
 设计系统即可完成的局部调整，可直接使用项目规范。用户要求、项目已采用的设计规范和适用移动端
 规则优先。先确认页面类型和信息密度，紧凑应用、控制台和设置页按现有产品层级、组件及密度设计。
 
@@ -130,6 +130,22 @@ bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/sou
 原型与 `standards_only` 只使用适用的设计方法，继续遵守既有静态原型验收、截图禁令和角色权限。
 将上游 Setup、命令表与参考中的引擎、下载、hooks、截图、浏览器、后台及委派步骤作为原文背景。
 本入口只读随包 Markdown；直接使用当前任务已有的产品背景、设计规范和获准工具。无需启动器或初始化。
+
+## Design topic query
+
+UI UX Pro Max 提供五个专题的离线查询。只有 `xy-uiux` 在当前设计任务中遇到具体未决问题时才选用。
+项目已采用的规范优先，Impeccable 提供主要设计方法。普通任务不预载语料、不自动检索，也不把查询当成方法缺失或失败时的回退。
+
+从当前物理插件根调用。中文任务先将问题提炼为上游语料可检索的具体英文关键词。例如，退款率随时间变化的图表用：
+
+```text
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" selected-skills query chart "trend over time time series refund rate" --max-results 2
+```
+
+按问题替换专题和关键词。`ux` 可查 `form validation errors` 或 `keyboard focus`，`typography` 可查
+`editorial magazine`，`color` 可查 `healthcare clinic`，`style` 可查 `minimalism`。`--max-results` 可省略，默认 3，范围 1–20。
+从 JSON 的 `results` 中选择与实际约束相符的条目，保留 `source.path` 与提交以便复核。
+空结果可缩小或改写关键词；建议、相似词与代码示例均需结合项目判断。查询只读一个专题，不生成或持久化设计系统，也不安装字体、打开链接或启动服务。
 
 ## Desktop verification
 

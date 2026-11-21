@@ -42,7 +42,7 @@ class SelectedSkillsTest(unittest.TestCase):
         self.lock = {"schema_version": 1, "dependencies": {}}
         # 最小来源夹具只服务拒绝合同；真实原版身份另由独立的固定闭包摘要断言。
         for name, spec in selected.SPECS.items():
-            if name in {"agent-desktop", "impeccable", "playwright-cli", "modern-web-guidance"}:
+            if name in {"agent-desktop", "impeccable", "playwright-cli", "modern-web-guidance", "ui-ux-pro-max"}:
                 # 受版本约束的依赖需要真实的完整闭包，不能沿用普通 Git 技能的两文件夹具。
                 self.lock["dependencies"][name] = copy.deepcopy(self.original_lock["dependencies"][name])
                 prefix = selected.VENDOR + "/" + name + "/"
@@ -104,6 +104,29 @@ class SelectedSkillsTest(unittest.TestCase):
         self.assertEqual("db2563118ab78a9bd1263d8add4db28c775a78dd512789acf9cccda1148782bf", hashlib.sha256(serialized).hexdigest())
         for alias, canonical in SELECTED_SKILL_ALIASES.items():
             self.assertEqual(selected.skill_path(canonical), selected.skill_path(alias))
+
+    def test_design_query_locks_only_the_selected_engine_and_topic(self):
+        from lib.skills.ui_ux_pro_max import search
+
+        dependency = self.lock["dependencies"]["ui-ux-pro-max"]
+        self.assertEqual("2de1134dc4d1cfe112934611ae5803ae17a1bd7e", dependency["commit"])
+        self.assertEqual("e01c12afa3c5ba4942eaa126651fb5d13537bee982eac4f2ca7185e0f6b4bd81", dependency["archive_sha256"])
+        prefix = selected.VENDOR + "/ui-ux-pro-max/"
+        expected = [selected.LOCK, prefix + selected.DESIGN_ENGINE, prefix + selected.DESIGN_ROOT + "/data/charts.csv"]
+        verified = []
+        with mock.patch.object(selected, "read_regular", wraps=selected.read_regular) as reads:
+            answer = search(self.fixture, "chart", "time series trend", 1, lambda path, digest: verified.append(path))
+        self.assertEqual("Line Chart", answer["results"][0]["Best Chart Type"])
+        self.assertEqual(expected, verified)
+        self.assertEqual(expected, [call.args[1] for call in reads.call_args_list])
+        no_match = search(self.fixture, "chart", "zzqqaabbxxqq", 3, None)
+        self.assertEqual((0, []), (no_match["count"], no_match["results"]))
+        for relative in ("LICENSE", selected.DESIGN_ENGINE, selected.DESIGN_ROOT + "/data/data-provenance.json",
+                         selected.DESIGN_ROOT + "/data/ux-guidelines.csv"):
+            incomplete = copy.deepcopy(self.lock)
+            del incomplete["dependencies"]["ui-ux-pro-max"]["files"][relative]
+            with self.assertRaises(ValueError):
+                selected.validate_lock(incomplete)
 
     def test_agent_desktop_release_is_fixed_and_runtime_pairs_are_required(self):
         lock = copy.deepcopy(self.original_lock)

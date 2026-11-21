@@ -225,7 +225,7 @@ def additional_read_helper(helper, arguments, access, project):
     return False
 
 
-def packaged_helper(words, access, plugin, cwd):
+def packaged_helper(words, access, plugin, cwd, *, redirected=False):
     prefix = ["bash", str(plugin / "lib/python_runtime.sh"), "-B", "-X", "utf8", str(plugin / "plugins/source_pack.py")]
     if words[:len(prefix)] != prefix:
         return False
@@ -236,6 +236,13 @@ def packaged_helper(words, access, plugin, cwd):
         return True
     if args[:2] == ["selected-skills", "read"]:
         return True
+    if args[:2] == ["selected-skills", "query"]:
+        # 只放行随包查询的固定形态。这里是宿主终端权限边界，程序另行绑定语料和摘要。
+        return (not redirected and cwd is not None and len(args) in (4, 6)
+                and args[2] in {"chart", "ux", "typography", "color", "style"}
+                and bool(args[3].strip()) and args[3].isprintable() and len(args[3]) <= 512
+                and not args[3].startswith("-")
+                and (len(args) == 4 or args[4] == "--max-results" and re.fullmatch(r"[1-9]|1[0-9]|20", args[5])))
     if args == ["selected-skills", "check"]:
         return True
     if args[0] == "xy-web-guidance":
@@ -423,7 +430,7 @@ def command_allowed(args, access, plugin):
         words = words[:redirect]
     if words[:2] == ["bash", str(plugin / "plugins/maintenance/launcher.sh")]:
         return redirect is None and maintenance_allowed(words, access, plugin)
-    if read_command(words, access, cwd) or packaged_helper(words, access, plugin, cwd):
+    if read_command(words, access, cwd) or packaged_helper(words, access, plugin, cwd, redirected=redirect is not None):
         return True
     if words[0] in {"touch", "mkdir"}:
         paths = words[1:]

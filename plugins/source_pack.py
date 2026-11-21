@@ -93,7 +93,7 @@ def _selected_bootstrap_bytes(relative: str) -> bytes:
         return body
 
 
-def _selected_read_verifier() -> Callable[[str, str], None]:
+def _selected_read_verifier(*extra_sources: str) -> Callable[[str, str], None]:
     """先验证会执行的读取与身份来源，再返回供本页核对锁和目标的摘要校验器。"""
 
     def unique_object(pairs: list[tuple[str, object]]) -> dict:
@@ -124,7 +124,7 @@ def _selected_read_verifier() -> Callable[[str, str], None]:
     # 读取器之前核验，避免篡改的别名模块将合法的 xy-impeccable 解析为另一篇合法正文。
     for relative in ("plugins/source_pack.py", "lib/__init__.py", "lib/skills/__init__.py",
                      "lib/skills/selected_skills.py", "lib/skills/role_skills.py", "product/__init__.py",
-                     "product/command_identity.py", "product/command_identity.json"):
+                     "product/command_identity.py", "product/command_identity.json", *extra_sources):
         verify_digest(relative, hashlib.sha256(_selected_bootstrap_bytes(relative)).hexdigest())
     from product.command_identity import load_identity
     if metadata.get("plugin_name") != load_identity(ROOT)["plugin_name"]:
@@ -205,8 +205,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         # 本命令无需从未经验证的身份模块解析 Playwright 命令名。先绑定分页实际
         # 使用的来源，其他子命令继续走原有解析和全量验证入口。
-        if argv[:2] == ["selected-skills", "read"]:
-            verify_source = _selected_read_verifier()
+        if argv[:2] in (["selected-skills", "read"], ["selected-skills", "query"]):
+            # 普通分段读取不依赖辅助查询；只有执行 query 才先核对专题适配器。
+            extra_sources = ("lib/skills/ui_ux_pro_max.py",) if argv[1] == "query" else ()
+            verify_source = _selected_read_verifier(*extra_sources)
             from lib.skills.selected_skills import main as selected_main
             return selected_main(argv[1:], root=ROOT, verify_source=verify_source)
         from product.command_identity import load_identity
@@ -219,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     resource = commands.add_parser("resource", help="locate a verified packaged resource")
     resource.add_argument("path")
-    selected = commands.add_parser("selected-skills", help="check, diagnose or read the bundled original selected skills")
+    selected = commands.add_parser("selected-skills", help="check, diagnose, read or query the bundled selected resources")
     selected.add_argument("arguments", nargs=argparse.REMAINDER)
     playwright = commands.add_parser(playwright_command, help="run the fixed bundled Playwright CLI; doctor reports readiness")
     playwright.add_argument("arguments", nargs=argparse.REMAINDER)

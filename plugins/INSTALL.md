@@ -29,6 +29,8 @@ bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source
 选中后的全文读取见物理插件根的 `platforms/shared/skills/xy-workflow/references/skill-selection.md`。
 PM 自动通过同包 `xy-grilling` 加载原版，`xy-grill-me` 由用户显式调用。
 
+同一物理插件内置 UI UX Pro Max 专题库，使用已有的 Python 标准库运行。有具体设计问题时按照上述共享规则的 `Design topic query` 调用，无需额外安装或服务。
+
 macOS 可从当前插件物理目录直接调用 `agent-desktop` v1.3.1，按实际运行环境选 `arm64` 或
 `x86_64`，CLI 使用同目录随装的 helper。`status` 报告权限及支持的界面：
 
