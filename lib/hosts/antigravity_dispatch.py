@@ -213,6 +213,61 @@ def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, ro
     raise TaskGraphError("no matching native invoke_subagent receipt for this AGY parent, task, role and workspace; retain the claim")
 
 
+def delivery_input(project: Path, config: Path, path: Path, pm_id: str, expected: str):
+    """Hook 和实际合并入口消费相同字节；执行阶段重新核对原件，再把真实业务判定交给交付 helper。"""
+    from lib.hosts.antigravity_handoff import ANTIGRAVITY_HANDOFF
+    from lib.hosts.handoff import validated_scratch_slot
+    from lib.task_graph_records import decode, digest, read_record
+    from lib.task_pool import registered_delivery
+
+    parent = parent_id(pm_id or "")
+    if path is None or config is None or not re.fullmatch("[a-f0-9]{64}", expected or ""):
+        raise TaskGraphError("AGY delivery requires an explicit input, adapter and SHA-256")
+    path = project / path
+    config = project / config
+    bases = ANTIGRAVITY_HANDOFF.compatible_bases(project)
+
+    def project_file(file, request=None):
+        if ".." in file.parts or not file.is_absolute():
+            return False
+        for base in bases:
+            if file.is_relative_to(base):
+                return request is None or file.is_relative_to(base / validated_scratch_slot(request))
+        return file.is_relative_to(project)
+
+    if not project_file(path) or not config.is_relative_to(project):
+        raise TaskGraphError("AGY delivery input must belong to the selected project")
+    body = read_record(path)
+    if digest(body) != expected:
+        raise TaskGraphError("AGY delivery input changed; recheck the current candidate")
+    payload = decode(body)
+    if not isinstance(payload, dict) or not isinstance(payload.get("task_graph"), dict):
+        raise TaskGraphError("delivery requires a task graph")
+    graph = payload["task_graph"]
+    request = graph.get("request_id")
+    if not isinstance(request, str) or not project_file(path, request):
+        raise TaskGraphError("AGY delivery input belongs to a different request")
+
+    def original():
+        return registered_delivery(project, pm_id, graph)
+
+    with original() as snapshot:
+        selected = [task for task in snapshot.tasks if task["request_id"] == request]
+        adapters = {task["controlled_document_access"]["adapter"] for task in selected if task["task_type"] == "writer"}
+        reviewers = [task for task in selected if task["task_type"] == "qa"]
+        if adapters != {config.relative_to(project).as_posix()} or len(reviewers) != 1:
+            raise TaskGraphError("AGY delivery requires the request's adapter and unique Reviewer")
+        if any(task["antigravity_claim"]["parent"] != parent for task in selected if "antigravity_claim" in task):
+            raise TaskGraphError("AGY delivery belongs to another dispatching PM")
+        # 首绑已核对创建回执；验收包与原图中的 Reviewer 身份由 merge_check 再核对。
+        # 已完成请求可能经历长会话或日志归档，不能要求重放旧的原生工具事件。
+        receipt = reviewers[0].get("request_receipt", {})
+        if (not receipt or payload.get("qa_task_pack") != receipt["task_pack"]["path"]
+                or not all(project_file(Path(receipt[key]["path"]), request) for key in ("task_pack", "handoff"))):
+            raise TaskGraphError("AGY delivery requires the accepted QA files for this request")
+    return payload, original
+
+
 class AntigravityDispatch(DispatchPolicy):
     """从当前 PM 身份和 AGY 本机日志校验派发，只向调用方返回证据或明确拒绝。"""
 
@@ -220,6 +275,11 @@ class AntigravityDispatch(DispatchPolicy):
 
     def __init__(self, pm_id: str | None):
         self.pm_id = pm_id
+
+    def delivery_input(self, project, config, path, expected):
+        if Path.cwd() != project:
+            raise TaskGraphError("AGY delivery requires the selected project as the target checkout")
+        return delivery_input(project, config, path, self.pm_id, expected)
 
     def check_pool_claim(self) -> None:
         if self.pm_id is None:

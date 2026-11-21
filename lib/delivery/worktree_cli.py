@@ -516,11 +516,13 @@ def merge_check(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, 
     return {**binding, "status": "merge_ready", "mode": mode}
 
 
-def merge(repo: Path, config: Path, payload: dict[str, Any]) -> dict[str, Any]:
+def merge(repo: Path, config: Path, payload: dict[str, Any], *, publication=nullcontext) -> dict[str, Any]:
     """先完整核验再快进，不解决冲突；Git 仍保留自身的锁、hooks 和脏目录检查。"""
     result = merge_check(repo, config, payload)
     # 不覆盖被忽略的本地文件；不通过 reset/update-ref 绕过 Git 的工作目录保护。
-    git(repo, "merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", result["head_revision"])
+    # 宿主可在最终快进前重新固定已校验的原件。漫长的差异和 QA 核对不占用原件发布锁。
+    with publication():
+        git(repo, "merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", result["head_revision"])
     if head(repo) != result["head_revision"]:
         raise DeliveryError("merge may have completed but HEAD changed; inspect before retrying, do not reset")
     clean(repo)
@@ -533,6 +535,8 @@ def main() -> int:
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--input", type=Path)
+    parser.add_argument("--pm-id")
+    parser.add_argument("--expect-sha256")
     parser.add_argument("--path", type=Path)
     parser.add_argument("--base")
     parser.add_argument("--head")
@@ -558,11 +562,15 @@ def main() -> int:
             else:
                 if args.config is None:
                     raise DeliveryError("merge commands require the project adapter --config")
-                payload = json.loads(args.input.read_text() if args.input else sys.stdin.read())
+                from lib.hosts.factory import dispatch_policy
+                policy = dispatch_policy(args.pm_id)
+                payload, publication = policy.delivery_input(repo, args.config, args.input, args.expect_sha256)
                 if not isinstance(payload, dict):
                     raise DeliveryError("delivery input must be an object")
-                operation = merge if args.command == "merge" else merge_check
-                result = operation(repo, args.config, payload)
+                if args.command == "merge":
+                    result = merge(repo, args.config, payload, publication=publication)
+                else:
+                    result = merge_check(repo, args.config, payload)
     except (DeliveryError, WorktreePolicyError, TaskGraphError, QAHandoffError, TaskSourceError,
             OSError, UnicodeError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)

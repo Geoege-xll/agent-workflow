@@ -1,7 +1,10 @@
 """派发准入使用的接口和已持久化的 AGY 历史格式。"""
 
+from contextlib import nullcontext
+import json
 from pathlib import Path
 import re
+import sys
 from typing import Callable
 
 from lib.task_graph import TaskGraphError
@@ -39,6 +42,12 @@ class DispatchPolicy:
     """共享准入的默认策略。各宿主只提供证据，原件更新及占用由任务池负责。"""
 
     native_required = False
+
+    def delivery_input(self, project: Path, config: Path, path: Path | None, expected: str | None):
+        """取得本次交付对象及其最终发布边界；默认宿主沿用文件或标准输入。"""
+        if expected is not None:
+            raise TaskGraphError("input fingerprint requires a PM-bound delivery")
+        return json.loads(path.read_text() if path else sys.stdin.read()), nullcontext
 
     def guard_public_update(self, task: dict, operation: dict) -> None:
         """任务池独占 AGY 首绑；已有历史可读，同值写回沿用原更新协议。"""

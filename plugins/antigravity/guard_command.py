@@ -220,7 +220,6 @@ def additional_read_helper(helper, arguments, access, project):
             values = options(rest, {"--repo", "--config"})
             return (access.project_root(values.get("--repo"), expected=project)
                     and ("--config" not in values or access.project_input(values["--config"], project)))
-        # merge-ready 会用输入对象读取图中的多个 linked worktree/回执，不能只核对 --repo。
         return False
     return False
 
@@ -263,8 +262,32 @@ def packaged_helper(words, access, plugin, cwd, *, redirected=False):
         return False
     if len(args) < 5 or args[:2] != ["helper", "--project"]:
         return False
-    project = access.project_root(args[2])
     helper, action, *rest = args[3:]
+    if helper == "lib/documents/prototype_feedback_cli.py" and action in {"prepare-delivery", "open", "stop"}:
+        required = ({"--root", "--request-id"} if action == "stop" else {"--root", "--adapter", "--pages"})
+        if action == "open":
+            required.update(("--plan", "--request-id"))
+        values = options(rest, required | ({"--group"} if action == "prepare-delivery" else set()), lists=("--pages",))
+        if redirected or not required <= values.keys():
+            return False
+        if "--plan" in values:
+            plan = Path(values["--plan"])
+            if plan.is_absolute() or ".." in plan.parts or values["--plan"] != plan.as_posix():
+                return False
+        return access.prototype_delivery(args[2], action, values)
+    project = access.project_root(args[2])
+    if helper == "lib/delivery/worktree_cli.py" and action in {"merge-ready", "merge"}:
+        required = {"--repo", "--config", "--input", "--pm-id", "--expect-sha256"}
+        values = options(rest, required)
+        if (access.parent or redirected or values.keys() != required or
+                values["--pm-id"] != "antigravity:" + access.current or
+                not access.project_root(values["--repo"], expected=project)):
+            return False
+        access.project_input(values["--config"], project)
+        from lib.hosts.antigravity_dispatch import delivery_input
+        delivery_input(project, Path(values["--config"]), Path(values["--input"]),
+                       values["--pm-id"], values["--expect-sha256"])
+        return True
     if helper in READ_HELPERS:
         return True
     if helper == "plugins/project_context.py":

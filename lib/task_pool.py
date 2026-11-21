@@ -149,6 +149,7 @@ class Snapshot:
     approved_gates: set[str]
     external_occupancy: bool
     size: int
+    source: dict
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,8 @@ class RegisteredTask:
     record: str
     execution_root: Path
     task: dict
+    source: dict
+    prototype_claim: str | None
 
 
 def _snapshot(root: Path, path: str, expected: str | None = None) -> Snapshot:
@@ -191,7 +194,7 @@ def _snapshot(root: Path, path: str, expected: str | None = None) -> Snapshot:
                "request": payload.get("request_id"), "members": members}
     return Snapshot(binding, {"path": path, "sha256": sha, "execution_roots": roots}, tasks,
                     set(payload.get("approved_gates", [])),
-                    bool(payload.get("active_paths") or payload.get("active_semantic_locks")), len(body))
+                    bool(payload.get("active_paths") or payload.get("active_semantic_locks")), len(body), payload)
 
 
 def _check_binding(entry: dict, snap: Snapshot, *, extend: bool = False) -> None:
@@ -339,9 +342,29 @@ def registered_tasks(root: Path, pm_id: str) -> tuple[RegisteredTask, ...]:
         if errors:
             raise TaskGraphError("已登记任务原件需要核对")
         return tuple(
-            RegisteredTask(snap.descriptor["path"], Path(snap.descriptor["execution_roots"][task["id"]]), task)
+            RegisteredTask(snap.descriptor["path"], Path(snap.descriptor["execution_roots"][task["id"]]), task,
+                           snap.source, data["records"][snap.descriptor["path"]].get("prototype_claim"))
             for snap in snapshots for task in snap.tasks
         )
+
+
+@contextmanager
+def registered_delivery(root: Path, pm_id: str, graph: dict):
+    """绑定当前 PM 登记的唯一请求图。交付者只在最终发布时短暂持有同一对池锁和原件锁。"""
+    request = graph.get("request_id")
+    with _index(root, pm_id, create=False) as (_, data):
+        matches = [(path, entry) for path, entry in data["records"].items()
+                   if entry["kind"] == "graph" and entry["request"] == request]
+        if not isinstance(request, str) or len(matches) != 1:
+            raise TaskGraphError("delivery requires this PM's unique registered request graph")
+        path, entry = matches[0]
+        with records._publication_lock(Path(path)):
+            snap = _snapshot(root, path)
+            _check_binding(entry, snap)
+            # 对象字段顺序可以不同；JSON 类型必须相同，不能照 Python 相等规则把 true 当作 1。
+            if json.dumps(snap.source, sort_keys=True) != json.dumps(graph, sort_keys=True):
+                raise TaskGraphError("delivery graph differs from the current registered original")
+            yield snap
 
 
 def _manifest(root, snapshots, capacity):

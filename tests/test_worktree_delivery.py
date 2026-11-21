@@ -39,7 +39,7 @@ class SettingsTest(unittest.TestCase):
 
 
 class GitDeliveryTest(unittest.TestCase):
-    def setUp(self) -> None:
+    def setUp(self, *, pending_qa=False, adapter="agent_workflow/project.yaml") -> None:
         temporary = tempfile.TemporaryDirectory(prefix="workflow-delivery-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
@@ -49,8 +49,8 @@ class GitDeliveryTest(unittest.TestCase):
         git(self.repo, "config", "user.name", "Workflow Fixture")
         git(self.repo, "config", "user.email", "workflow-fixture@example.invalid")
         # 各夹具使用本地身份和确切文件；测试提交代表 PM 授权的临时检查点。
-        self.config = self.repo / "agent_workflow/project.yaml"
-        self.config.parent.mkdir()
+        self.config = self.repo / adapter
+        self.config.parent.mkdir(exist_ok=True)
         self.config.write_text((PACK / "project.yaml").read_text())
         (self.repo / "src").mkdir()
         (self.repo / "src/a.py").write_text("a = 0\n")
@@ -67,7 +67,7 @@ class GitDeliveryTest(unittest.TestCase):
             "## 验收结果与当前已交付行为\n已有行为。\n## 批准依据与必要证据\n"
             "- 批准依据: 既有用户批准\n- 验收证据: 既有验收记录\n")
         (self.repo / "docs/PROJECT.md").write_text("# Project\n[Baseline](plans/baseline.md)\n")
-        git(self.repo, "add", "agent_workflow/project.yaml", "src/a.py", "src/b.py",
+        git(self.repo, "add", adapter, "src/a.py", "src/b.py",
             "docs/STANDARDS.md", "docs/standards/GENERAL.md", "docs/PROJECT.md", "docs/plans/baseline.md")
         git(self.repo, "commit", "-m", "fixture baseline")
         self.base = head(self.repo)
@@ -141,7 +141,12 @@ class GitDeliveryTest(unittest.TestCase):
             "mode": "confirm", "source": "user:approve-current-merge", "request_id": "req",
             "target_branch": "main", "target_base": self.base, "head_revision": self.tip,
             "diff_fingerprint": actual["diff_fingerprint"]}}
-        self.accept_candidate()
+        if pending_qa:
+            # 宿主集成用例从未领取的 QA 开始，由其真实任务池绑定并验收这同一候选。
+            self.qa_task["state"] = "DECLARED"
+            self.qa_task.pop("agent_ref")
+        else:
+            self.accept_candidate()
 
     def accept_candidate(self) -> None:
         """使用同一测试 Reviewer 的真实导出与接收入口，测试随后单独运行正式 Git 交付。"""
