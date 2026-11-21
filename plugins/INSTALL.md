@@ -1,6 +1,6 @@
 # 安装 xy-workflow 正式插件
 
-本页对应 `xy-workflow 3.0.9` 和配套 Native Agent Config `0.1.7`。正式安装使用 Git stable 来源和 GitHub Release，维护入口通过包内组件描述校验 ZIP，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [插件载荷](PLUGIN.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
+本页对应 `xy-workflow 3.0.9` 工作树与配套 Native Agent Config `0.1.8` 未发布候选。已发布的 `3.0.9` 配套 `0.1.7`。正式安装使用 Git stable 来源和 GitHub Release，维护入口通过包内组件描述校验 ZIP，实际安装范围与版本以客户端回执为准。Windows 分发暂停。 [插件载荷](PLUGIN.md) · [发行记录](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/plans/stable-product-release.md) · [使用手册](https://github.com/Geoege-xll/agent-workflow/blob/main/docs/usage.md)
 
 本页 `xy-workflow` 身份由 `product/command_identity.json` 唯一维护；使用下列命令时核对匹配的远程分发资产与客户端回执，
 不能仅凭源码版本或命令说明判断本机已经切换。活动任务使用原物理资源完成后再按官方客户端切换。
@@ -13,8 +13,8 @@
 
 ## 随包精选 Skill
 
-安装插件会一并提供 Grill Me、grilling、Taste、官方 Playwright CLI/Skill 和官方
-`agent-desktop`。前四个入口为 `xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright`，桌面
+当前候选一并提供 Grill Me、grilling、Impeccable、官方 Playwright CLI/Skill 和官方
+`agent-desktop`。前四个入口为 `xy-grill-me`、`xy-grilling`、`xy-impeccable`、`xy-playwright`，桌面
 Skill 使用上游名称 `agent-desktop`。配置入口为 `xy-config`。固定来源、版本、逐文件清单、许可
 和资产署名见当前包的 `third_party/selected-skills.lock.json` 与 `third_party/selected-skills/`。
 
@@ -25,7 +25,7 @@ bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source
 bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source_pack.py selected-skills diagnose
 ```
 
-`check` 核对整包资源锁。`diagnose` 只读检查已有 Node >=22、浏览器与可选 ffmpeg。Taste 按需使用，
+`check` 核对整包资源锁。`diagnose` 只读检查已有 Node >=22、浏览器与可选 ffmpeg。Impeccable 的设计方法可按需离线使用，
 选中后的全文读取见物理插件根的 `platforms/shared/skills/xy-workflow/references/skill-selection.md`。
 PM 自动通过同包 `xy-grilling` 加载原版，`xy-grill-me` 由用户显式调用。
 

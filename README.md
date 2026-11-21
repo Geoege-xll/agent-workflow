@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，按任务选择需求、方案与原型确认，并组织验证和交付。
 
-本源码为 **xy-workflow 3.0.9**，配套 **Native Agent Config 0.1.7**。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
+本源码为 **xy-workflow 3.0.9**，工作树配套 **Native Agent Config 0.1.8 未发布候选**；已发布的 3.0.9 配套 0.1.7。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
 
 `3.0.9` 在 AGY CLI 的原生工具执行前核对写入分工。普通委托通过任务池领取并派给真实实现者。当前用户明确指定主会话亲自修改时，按指定目标放行。AGY 在项目内交接任务包，减少系统临时目录触发的宿主权限请求。
 
@@ -91,7 +91,7 @@ Codex／Claude 提供用户级和项目级工作流启停、恢复继承；AGY �
 
 ## 精选技能与文档
 
-Grill Me、需求访谈 primitive、Taste、Playwright CLI 随插件固定交付，分别通过 `xy-grill-me`、`xy-grilling`、`xy-taste`、`xy-playwright` 访问。原版资源、许可与薄适配分开维护；不要求另装全局 Skill 或 CLI。原有工作流方法保持，所有角色也可按任务使用宿主实际提供的其他技能。
+工作树候选内置 Grill Me、需求访谈 primitive、Impeccable 离线设计方法和 Playwright CLI，分别通过 `xy-grill-me`、`xy-grilling`、`xy-impeccable`、`xy-playwright` 访问。`xy-uiux` 可按任务需要离线读取 Impeccable 原文和参考。原版资源、许可与薄适配分开维护；不要求另装全局 Skill 或 CLI。原有工作流方法保持，所有角色也可按任务使用宿主实际提供的其他技能。
 
 新增 `xy-web-guidance` 和 `xy-apple-guidance` **可发现、按条件推荐，不进入角色无条件预载**。前者随包提供 GoogleChrome 官方固定版本的完整现代 Web 指导与离线查询，查询需要已有 Node 22+；后者只读使用本机 Xcode 官方 SwiftUI 指导，当前验证边界为观察到的 Xcode 27.x 布局，不再分发 Apple 正文。详见[角色技能主题](docs/plans/role-skill-routing.md)。
 

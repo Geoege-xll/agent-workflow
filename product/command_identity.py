@@ -12,7 +12,7 @@ import stat
 # 合同获准调整时，从唯一 JSON 读取后以 sort_keys=True、separators=(",", ":")、
 # ensure_ascii=False 序列化 UTF-8，再重算 SHA256；同步调用方与发行 provenance。
 # 该摘要不是签名或新的业务批准步骤，只防止独立包读取被替换的身份声明。
-_APPROVED_CONTENT_SHA256 = "7412f10cb54157d9ef2bf538b37fbd77977a289e4866af7e971621fef6ca6276"
+_APPROVED_CONTENT_SHA256 = "49c4ac3bfdc2bd465d0c879107e3e7a9651e164c2b1911a0c4fa545cf6497b4c"
 _FIELDS = {"schema_version", "plugin_name", "marketplaces", "artifact_prefix", "skill_aliases",
            "managed_roles", "legacy_plugin_name", "legacy_marketplaces"}
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")

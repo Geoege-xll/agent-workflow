@@ -387,14 +387,11 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertFalse(stat.S_ISLNK(entry.external_attr >> 16), name)
                     self.assertNotIn("..", Path(name).parts)
                     self.assertFalse(name.startswith("/"), name)
-                    # 上游完整资产含技术品牌图标，不是被暂停的Windows发行入口。
-                    if not name.startswith("third_party/selected-skills/taste/skills/taste-skill/assets/"):
-                        self.assertNotIn("windows", name.casefold())
+                    self.assertNotIn("windows", name.casefold())
                     # 原版Playwright完整闭包允许其精确vendor/node_modules根，不能放行任意依赖目录。
                     playwright_runtime = name.startswith("third_party/selected-skills/playwright-cli/runtime/node_modules/")
                     if not playwright_runtime:
                         self.assertNotIn("node_modules", name)
-                    if not playwright_runtime and not name.startswith("third_party/selected-skills/taste/skills/taste-skill/assets/"):
                         self.assertNotIn("npm", name.casefold())
                     self.assertNotIn("npx", name.casefold())
                     self.assertNotIn(name, {"package.json", "package-lock.json", "manager/cli.py", "manager/tui.py"})
@@ -507,6 +504,11 @@ class PluginDeliveryTest(unittest.TestCase):
                     prefix = plugin.relative_to(output / "local" / host)
                     expected = prefix / builder.MANIFESTS[host]
                     self.assertIn(expected.as_posix(), distribution.namelist())
+                    # 两份移动端参考源自 ehmo；主包与本地安装源均须带齐原作者 MIT 全文。
+                    license_path = "skills/xy-impeccable/platform-design-skills-LICENSE.txt"
+                    original_sha = "1126322e2cc8d165adc4c792eeb195717de2bcc7b39be1ce77959d78e87ef685"
+                    self.assertEqual(original_sha, hashlib.sha256(package.read(license_path)).hexdigest())
+                    self.assertEqual(package.read(license_path), distribution.read((prefix / license_path).as_posix()))
                     # 主包、解包目录与继续发布所需的本地源 ZIP 都必须带齐两对执行位。
                     for arch in ("arm64", "x86_64"):
                         for binary in ("agent-desktop", "agent-desktop-macos-helper"):
@@ -737,39 +739,39 @@ class PluginDeliveryTest(unittest.TestCase):
             return subprocess.run([*command, *args], cwd=self.root, env=environment,
                                   capture_output=True, text=True, timeout=20)
 
-        # 两条真实入口面对同一损坏安装时有不同范围。读 Taste 仍可用，显式 check 拒绝缺项。
+        # 两条真实入口面对同一损坏安装时有不同范围。读 Impeccable 仍可用，显式 check 拒绝缺项。
         unrelated = root / skill_path("grilling")
         original = unrelated.read_bytes()
         try:
             unrelated.unlink()
-            page = invoke("read", "xy-taste")
+            page = invoke("read", "xy-impeccable")
             self.assertEqual(0, page.returncode, page.stdout + page.stderr)
-            self.assertEqual(skill_path("design-taste-frontend"), json.loads(page.stdout)["path"])
+            self.assertEqual(skill_path("impeccable"), json.loads(page.stdout)["path"])
             self.assertEqual(2, invoke("check").returncode)
         finally:
             unrelated.write_bytes(original)
 
-        relative = skill_path("design-taste-frontend")
+        relative = skill_path("impeccable")
         target, lock, manifest = root / relative, root / LOCK, root / "sources.json"
         document, raw_lock, provenance = target.read_bytes(), lock.read_bytes(), manifest.read_bytes()
         try:
             target.unlink()
-            self.assertEqual(2, invoke("read", "xy-taste").returncode)
+            self.assertEqual(2, invoke("read", "xy-impeccable").returncode)
             target.write_bytes(b"x" + document[1:])
-            result = invoke("read", "xy-taste")
+            result = invoke("read", "xy-impeccable")
             self.assertEqual(2, result.returncode)
             self.assertIn("selected skill digest mismatch", result.stderr)
             target.write_bytes(document)
             # 即使 JSON 语义不变，替换锁原字节也会破坏其与当前发行清单的绑定。
             lock.write_bytes(raw_lock + b"\n")
-            result = invoke("read", "xy-taste")
+            result = invoke("read", "xy-impeccable")
             self.assertEqual(2, result.returncode)
             self.assertIn(LOCK, result.stderr)
             lock.write_bytes(raw_lock)
             altered = json.loads(provenance)
             del altered["payload_sha256"][relative]
             manifest.write_text(json.dumps(altered), encoding="utf-8")
-            result = invoke("read", "xy-taste")
+            result = invoke("read", "xy-impeccable")
             self.assertEqual(2, result.returncode)
             self.assertIn(relative, result.stderr)
         finally:
@@ -777,8 +779,24 @@ class PluginDeliveryTest(unittest.TestCase):
             lock.write_bytes(raw_lock)
             manifest.write_bytes(provenance)
 
+        arguments = ("read", "xy-impeccable", "--reference")
+        for invalid in ("../LICENSE", "reference/../SKILL.md", "reference/missing.md", "scripts/impeccable"):
+            self.assertEqual(2, invoke(*arguments, invalid).returncode)
+        reference = "reference/layout.md"
+        target = (root / relative).parent / reference
+        document = target.read_bytes()
+        try:
+            target.unlink()
+            self.assertEqual(2, invoke(*arguments, reference).returncode)
+            target.write_bytes(b"x" + document[1:])
+            result = invoke(*arguments, reference)
+            self.assertEqual(2, result.returncode)
+            self.assertIn("selected skill digest mismatch", result.stderr)
+        finally:
+            target.write_bytes(document)
+
         for name, change in (
-                ("lib/skills/role_skills.py", b'\nSELECTED_SKILL_ALIASES["xy-taste"] = "grilling"\n'),
+                ("lib/skills/role_skills.py", b'\nSELECTED_SKILL_ALIASES["xy-impeccable"] = "grilling"\n'),
                 ("product/command_identity.py", b'\nraise RuntimeError("tampered identity module ran")\n'),
                 ("product/command_identity.json", b"\n")):
             with self.subTest(source=name):
@@ -787,14 +805,14 @@ class PluginDeliveryTest(unittest.TestCase):
                 try:
                     # 被篡改的是实际 Python 别名/身份来源，目标和锁仍保持合法，不能误读另一篇原文。
                     source.write_bytes(original + change)
-                    result = invoke("read", "xy-taste")
+                    result = invoke("read", "xy-impeccable")
                     self.assertEqual(2, result.returncode, result.stdout + result.stderr)
                     self.assertIn("selected skill package source digest mismatch: " + name, result.stderr)
                     self.assertEqual("", result.stdout)
                 finally:
                     source.write_bytes(original)
 
-    def test_selected_skills_are_complete_detached_and_do_not_register_taste_hooks(self):
+    def test_selected_skills_are_complete_detached_and_do_not_register_upstream_hooks(self):
         """真实三端载荷消费同一原文，连续读取覆盖全部字节，绝不执行原版脚本。"""
         from lib.skills.selected_skills import DESKTOP_SKILL_ROOT, LOCK, VENDOR, snapshot, skill_path
         _, originals = snapshot(PACK)
@@ -854,11 +872,15 @@ class PluginDeliveryTest(unittest.TestCase):
                         self.assertEqual(originals[source], target.read_bytes())
                         self.assertEqual({"source": source, "transform": "identity"}, metadata["projections"][relative])
                 self.assertFalse((root / "skills/xy-agent-desktop").exists())
-                adapter = (root / "skills/xy-taste/SKILL.md").read_bytes()
+                adapter = (root / "skills/xy-impeccable/SKILL.md").read_bytes()
                 header, _ = builder.split_frontmatter(adapter)
                 self.assertNotIn(b"hooks:", header)
-                self.assertNotIn(b"gate.mjs", (root / "hooks/hooks.json").read_bytes() if host == "codex" else b"")
-                self.assertFalse((root / "skills/xy-taste/scripts").exists())
+                for hooks in root.rglob("hooks.json"):
+                    self.assertNotIn(b"impeccable", hooks.read_bytes())
+                self.assertFalse((root / "skills/xy-taste").exists())
+                self.assertFalse((root / VENDOR / "taste").exists())
+                self.assertFalse((root / VENDOR / "impeccable/plugin/skills/impeccable/scripts").exists())
+                self.assertFalse((root / "skills/xy-impeccable/scripts").exists())
                 command = ["bash", str(root / "lib/python_runtime.sh"), "-B", "-X", "utf8", str(root / "plugins/source_pack.py")]
                 environment = isolated_environment(self.root / "selected-home")
                 checked = subprocess.run([*command, "selected-skills", "check"], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
@@ -900,22 +922,26 @@ class PluginDeliveryTest(unittest.TestCase):
                                             cwd=project, env=environment, capture_output=True, text=True, timeout=20)
                 self.assertEqual(0, apple_read.returncode, apple_read.stdout + apple_read.stderr)
                 self.assertEqual("官方布局夹具引用\n", json.loads(apple_read.stdout)["content"])
-                chunks, offset = [], 0
-                taste_digest = hashlib.sha256(originals[skill_path("design-taste-frontend")]).hexdigest()
-                while True:
-                    result = subprocess.run([*command, "selected-skills", "read", "xy-taste", "--offset", str(offset), "--length", "12000"], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
-                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                    page = json.loads(result.stdout)
-                    self.assertEqual(offset, page["offset"])
-                    self.assertEqual(taste_digest, page["sha256"])
-                    chunks.append(page["content"].encode("utf-8"))
-                    offset = page["next_offset"]
-                    if page["eof"]:
-                        break
-                self.assertEqual(originals[skill_path("design-taste-frontend")], b"".join(chunks))
-                resource = subprocess.run([*command, "resource", skill_path("design-taste-frontend")], cwd=project, env=environment, capture_output=True, text=True, timeout=20)
-                self.assertEqual(0, resource.returncode, resource.stdout + resource.stderr)
-                self.assertEqual(str(root / skill_path("design-taste-frontend")), json.loads(resource.stdout)["path"])
+                design_path = skill_path("impeccable")
+                for reference in (None, "reference/craft-floor.md"):
+                    expected_path = str(Path(design_path).parent / reference) if reference else design_path
+                    arguments = ["selected-skills", "read", "xy-impeccable"]
+                    if reference:
+                        arguments.extend(("--reference", reference))
+                    expected = originals[expected_path]
+                    chunks, offset = [], 0
+                    while True:
+                        result = subprocess.run([*command, *arguments, "--offset", str(offset), "--length", "8000"],
+                                                cwd=project, env=environment, capture_output=True, text=True, timeout=20)
+                        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                        page = json.loads(result.stdout)
+                        self.assertEqual((expected_path, offset, len(expected), hashlib.sha256(expected).hexdigest()),
+                                         (page["path"], page["offset"], page["total_bytes"], page["sha256"]))
+                        chunks.append(page["content"].encode("utf-8"))
+                        offset = page["next_offset"]
+                        if page["eof"]:
+                            break
+                    self.assertEqual(expected, b"".join(chunks))
                 self.assertEqual([], list(project.iterdir()))
 
     def test_detached_awf_prototype_navigation_fingerprints_and_visual_gate(self):

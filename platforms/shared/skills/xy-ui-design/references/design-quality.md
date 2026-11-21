@@ -13,7 +13,7 @@ and dimensions; business and mental models also remain project-specific.
 - First read applicable rules from the built-in `foundations-rules.md` and `components-rules.md`;
   when a project index exists, follow its links to current project-specific foundation values,
   components, and platform differences. Inspect only relevant tokens, pages, and dependencies.
-  Official guidance and canonical Taste are references and cannot override approved requirements,
+  Official guidance and the bundled Impeccable design methods are references and cannot override approved requirements,
   project standards, compact application layouts or the existing static prototype-verification boundary.
 - Determine target users, use contexts, main tasks, content density, platform/module, existing
   baseline, color and scale token sources, reusable components, and allowed variants. If a baseline
@@ -163,11 +163,11 @@ Sources support checks as needed; network access is not required for every task.
   with the directory's [Apache-2.0 license](https://raw.githubusercontent.com/anthropics/skills/main/skills/frontend-design/LICENSE.txt).
   It informs visual intent around a real subject, content-driven typography, and restrained
   self-review; its screenshot self-review and any additional confirmation process are not adopted.
-- Leonxlnx [Taste](https://github.com/Leonxlnx/taste-skill), fixed by the bundled selected-skills lock.
-  The complete original and its MIT LICENSE plus asset-specific credits stay in the canonical vendor
-  directory. Use the no-hooks adapter and fully read the original under xy-ui-design's contract;
-  do not register Stop hooks or execute its screenshot/gate pipeline during default prototype work.
-  Its marketing patterns are conditional advice, not a required layout for compact product consoles.
+- Paul Bakaus’s [Impeccable](https://github.com/pbakaus/impeccable/tree/b49177d32788f2dc585c42831d845dacf1ebed2c/plugin/skills/impeccable)
+  supplies optional offline design methods, including surface modes, hierarchy and refinement. Read the
+  locked Markdown and relevant references through the shared skill-selection contract. The canonical
+  vendor directory includes the Apache-2.0 LICENSE and NOTICE.md. The existing design role, project
+  standards and static prototype checks govern their application.
 - 跨页面一致性参考 wg-skills 的取证方法，用项目基线解释同语义组件之间的差异。固定提交附 Apache-2.0 许可。
   [frontend-style-harmonizer](https://github.com/jiushiwon/wg-skills/blob/ff6680f4a722a057e00c54a2abde6d574f582bd7/frontend/frontend-style-harmonizer-skill/SKILL.md) · [许可证](https://github.com/jiushiwon/wg-skills/blob/ff6680f4a722a057e00c54a2abde6d574f582bd7/LICENSE)
 - 流程反馈参考 mobile-app-ui-design 按任务阶段给出状态和后续动作的思路。固定提交的 README 标注 MIT，

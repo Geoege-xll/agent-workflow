@@ -42,8 +42,8 @@ class SelectedSkillsTest(unittest.TestCase):
         self.lock = {"schema_version": 1, "dependencies": {}}
         # 最小来源夹具只服务拒绝合同；真实原版身份另由独立的固定闭包摘要断言。
         for name, spec in selected.SPECS.items():
-            if name in {"agent-desktop", "playwright-cli", "modern-web-guidance"}:
-                # 含运行时的依赖需要真实的完整闭包，不能沿用普通 Git 技能的两文件夹具。
+            if name in {"agent-desktop", "impeccable", "playwright-cli", "modern-web-guidance"}:
+                # 受版本约束的依赖需要真实的完整闭包，不能沿用普通 Git 技能的两文件夹具。
                 self.lock["dependencies"][name] = copy.deepcopy(self.original_lock["dependencies"][name])
                 prefix = selected.VENDOR + "/" + name + "/"
                 for relative, body in self.original_files.items():
@@ -72,7 +72,7 @@ class SelectedSkillsTest(unittest.TestCase):
         # 期望由上游tree/blob核对调查得到，不从被测锁反推，防止删资产后同步改锁假绿。
         identities = {
             "grill-me": ("5863806dd4e15c63174bee4e7515a4256792ecfa", 4, 2484, "ef8ba82c13ec166f6d3a0793f80f2fc504d3248865a3cf2e0f9327e7d481f899", "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"),
-            "taste": ("f6b76575f949707b4e3c37cd86cb44b0b98643e8", 1631, 36601022, "262d67d4b9ce4e8b0bf95d2f9ae9eda34d149a0b5348006b38b74cadd17c85d4", "4575a543ab88dad12ccea7d97e563d0bce5b448b06072e65d3264497dad326df"),
+            "impeccable": ("b49177d32788f2dc585c42831d845dacf1ebed2c", 52, 503082, "451c968891ac21e67d5812dee9ac96075e590edc9cb2ae6e742c2170a6cf5735", "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812"),
         }
         for name, (commit, count, size, digest, license_digest) in identities.items():
             item = lock["dependencies"][name]
@@ -83,12 +83,17 @@ class SelectedSkillsTest(unittest.TestCase):
             serialized = "".join(r["sha256"] + "  " + p + "\n" for p, r in sorted(inventory.items())).encode()
             self.assertEqual(digest, hashlib.sha256(serialized).hexdigest())
             self.assertEqual(license_digest, item["files"]["LICENSE"]["sha256"])
+        design = lock["dependencies"]["impeccable"]
+        self.assertEqual("4.10.0", design["version"])
+        self.assertEqual("518c9f7e69ca32d80221b3cd7e1a5f5755762e5e6d748137da101454caac0f44", design["archive_sha256"])
+        self.assertEqual("01bf53e5d24d64e19e9e1c33b24c37cef0d314323df7bf678c6ba22d4528a115",
+                         design["files"]["NOTICE.md"]["sha256"])
         explicit = files[selected.skill_path("grill-me")]
         self.assertIn(b"disable-model-invocation: true", explicit)
         self.assertNotIn("grill-me", CORE_SKILLS)
-        self.assertEqual({"xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"}, set(SELECTED_SKILLS))
+        self.assertEqual({"xy-grill-me", "xy-grilling", "xy-impeccable", "xy-playwright"}, set(SELECTED_SKILLS))
         self.assertEqual(("xy-grilling",), PM_SKILLS)
-        self.assertNotIn("xy-taste", ROLE_SKILLS["xy-uiux"])
+        self.assertNotIn("xy-impeccable", ROLE_SKILLS["xy-uiux"])
         self.assertNotIn("xy-playwright", ROLE_SKILLS["xy-web"])
         playwright = lock["dependencies"]["playwright-cli"]
         self.assertEqual("261206400b18cd0629a8b45dd14ea5488fcf261f", playwright["commit"])
@@ -154,12 +159,15 @@ class SelectedSkillsTest(unittest.TestCase):
 
     def test_lock_rejects_wrong_dependency_sources_paths_and_digest_shapes(self):
         for change in (lambda x: x.update(schema_version=True),
-                       lambda x: x["dependencies"].pop("taste"),
-                       lambda x: x["dependencies"]["taste"].update(repository="https://evil.invalid"),
-                       lambda x: x["dependencies"]["taste"].update(commit="main"),
-                       lambda x: x["dependencies"]["taste"].update(roots=["other"]),
-                       lambda x: x["dependencies"]["taste"]["files"].update({"../outside": {"size": 0, "sha256": "a" * 64}}),
-                       lambda x: x["dependencies"]["taste"]["files"].update({"skills/taste-skill/x": {"size": True, "sha256": "a" * 64}})):
+                       lambda x: x["dependencies"].pop("impeccable"),
+                       lambda x: x["dependencies"]["impeccable"].update(repository="https://evil.invalid"),
+                       lambda x: x["dependencies"]["impeccable"].update(commit="main"),
+                       lambda x: x["dependencies"]["impeccable"].update(roots=["other"]),
+                       lambda x: x["dependencies"]["impeccable"]["files"].pop("NOTICE.md"),
+                       lambda x: x["dependencies"]["impeccable"]["files"].update({
+                           "plugin/skills/impeccable/reference/setup.sh": {"size": 1, "sha256": "a" * 64}}),
+                       lambda x: x["dependencies"]["impeccable"]["files"].update({"../outside": {"size": 0, "sha256": "a" * 64}}),
+                       lambda x: x["dependencies"]["impeccable"]["files"].update({"plugin/skills/impeccable/reference/shape.md": {"size": True, "sha256": "a" * 64}})):
             lock = copy.deepcopy(self.lock)
             change(lock)
             with self.assertRaises(ValueError):
@@ -171,14 +179,14 @@ class SelectedSkillsTest(unittest.TestCase):
             json.loads('{"schema_version":1,"schema_version":1}', object_pairs_hook=selected.unique_object)
 
     def test_chunked_read_preserves_utf8_full_coverage_and_rejects_bad_ranges(self):
-        path = selected.skill_path("design-taste-frontend")
+        path = selected.skill_path("grilling")
         body = (self.fixture / path).read_bytes()
         digest = hashlib.sha256(body).hexdigest()
         offset, chunks = 0, []
         # 每页固定为一次锁读取和一次正文读取，跨 UTF-8 边界重组仍与原字节相同。
         with mock.patch.object(selected, "read_regular", wraps=selected.read_regular) as reads:
             while True:
-                page = selected.read_selected_chunk(self.fixture, "design-taste-frontend", offset, 4)
+                page = selected.read_selected_chunk(self.fixture, "grilling", offset, 4)
                 self.assertEqual(offset, page["offset"])
                 self.assertEqual(digest, page["sha256"])
                 chunks.append(page["content"].encode())
@@ -188,12 +196,12 @@ class SelectedSkillsTest(unittest.TestCase):
                     break
             self.assertEqual([selected.LOCK, path] * len(chunks), [call.args[1] for call in reads.call_args_list])
         self.assertEqual(body, b"".join(chunks))
-        page = selected.read_selected_chunk(self.fixture, "design-taste-frontend", len(body), 4)
+        page = selected.read_selected_chunk(self.fixture, "grilling", len(body), 4)
         self.assertTrue(page["eof"])
         self.assertEqual("", page["content"])
         for offset, length in ((-1, 12000), (len(body) + 1, 12000), (0, 0), (0, 16001), (body.index("中".encode()) + 1, 4)):
             with self.subTest(offset=offset, length=length), self.assertRaises(ValueError):
-                selected.read_selected_chunk(self.fixture, "design-taste-frontend", offset, length)
+                selected.read_selected_chunk(self.fixture, "grilling", offset, length)
 
     def test_playwright_archives_require_exact_graph_integrity_and_full_inventory(self):
         expected_item = copy.deepcopy(self.original_lock["dependencies"]["playwright-cli"])

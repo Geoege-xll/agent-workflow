@@ -8,18 +8,20 @@
 
 ## 目标与范围
 
-用户明确要求工作流插件提供标准流程与精选技能组合；新机器安装插件后无需逐个安装第三方 Skill。2026-11-13 确认接入上游 Grill Me 与 Taste，并明确指示“开始优化”；实施中进一步明确批准将 playwright-cli 及其 Skill 同样内置交付。PM 使用 Grill Me 深挖需求，xy-uiux 使用 Taste 完成设计方法，Web 实现验证及 Web 应用验收优先使用 Playwright CLI；不引入这些上游的其他无关技能。
+本次替换面向开发分支上的三端候选。设计角色按需从 `xy-impeccable` 离线读取 Impeccable 的正式分发原文和适用参考，沿用项目设计规范、原型静态验证和既有角色分工。
+
+用户最初要求工作流插件提供标准流程与精选技能组合；新机器安装插件后无需逐个安装第三方 Skill。2026-11-13 确认接入上游 Grill Me 与 Taste，并明确指示“开始优化”；实施中进一步明确批准将 playwright-cli 及其 Skill 同样内置交付。当时的分工是 PM 使用 Grill Me 深挖需求，xy-uiux 使用 Taste 完成设计方法，Web 实现验证及 Web 应用验收优先使用 Playwright CLI；不引入这些上游的其他无关技能。
 
 现有本地改写的 grill-me 不能继续冒充第三方原版。第三方内容保留固定上游版本、真实名称、必要文件与许可证；本项目自己的覆盖记录、调度、确认与交接规则归入工作流适配层。
 
-当前迭代经用户确认，直接随插件交付 Vercel 官方 `agent-desktop` 的原版 Skill、macOS CLI 和配套 helper，覆盖 Apple Silicon 和 Intel，同时将 Taste 改为按需使用并消除重复读取开销。生产桌面应用为本轮运行覆盖范围。
+此前迭代经用户确认，已随插件交付 Vercel 官方 `agent-desktop` 的原版 Skill、macOS CLI 和配套 helper，覆盖 Apple Silicon 和 Intel，同时将 Taste 改为按需使用并消除重复读取开销。生产桌面应用是当时的运行覆盖范围。
 
 上一轮交付范围为 Grill Me、Taste、Playwright CLI 及其必要依赖、三端角色接入和 xy-* 命名。配置页视觉实现、通用原型工具、业务项目迁移和平台开发技能分别由对应主题维护。Windows 适配保持暂停。
 
 ## 需求与验收
 
 - REQ-301：使用 mattpocock/skills 的真实 Grill Me 及其必要关联 Skill，接单时由 PM 负责需求访谈与覆盖判断；现有事实复用，后续需求不重启正在执行的任务。
-- REQ-302：使用 Leonxlnx/taste-skill 的真实 design-taste-frontend，供 xy-uiux 使用；清理 ui-ux-pro-max 的强制依赖、预载与隐式回退。
+- REQ-302（历史，现行设计方法见 REQ-324）：曾使用 Leonxlnx/taste-skill 的真实 design-taste-frontend，供 xy-uiux 使用；清理 ui-ux-pro-max 的强制依赖、预载与隐式回退。
 - REQ-303：统一声明第三方来源、固定 commit、文件摘要、许可证、依赖闭包和角色绑定。构建读取已经审阅的本地原版资源，不联网、不运行上游脚本；校验失败明确拒绝。
 - REQ-304：三端发行包带齐必要 Skill、脚本、资源与引用；新机器无需另装这些 Skill。安装齐备与 Node／浏览器等运行环境、宿主调用能力分别诊断。
 - REQ-305：按官方能力投影角色声明与调用入口。Claude 的 skills 预载、AGY 的路径声明、Codex 的可用技能与指令交接分别处理；声明存在不冒称实际执行。
@@ -30,17 +32,18 @@
 - REQ-310：Node 保留为明确运行前提，不修改 PATH 或自动安装系统运行时；浏览器复用官方已有缓存，缺失时通过固定版本官方入口按宿主权限准备。不得运行会向业务项目写 .playwright 或修改 .gitignore 的初始化命令来冒充插件安装。
 - REQ-311：优先复用项目已有测试。需要补充 Web 交互验收时，优先 playwright-cli 与其 Skill；其他浏览器工具只在存在具体能力／环境限制或用户指定时采用，电脑操控用于确需桌面能力的场景。记录实际工具选择、环境、范围和证据，禁止失败后无理由随机切换或绕过权限限制。
 - REQ-312：原型阶段默认不自动化／截图、独立只读 QA、项目数据与现有登录边界继续保留。Playwright 的会话及临时产物明确归属本轮任务，复用系统浏览器缓存，关闭本轮自建会话，不清理用户已有浏览器／配置；真实运行与技能完整阅读分别报告。
-- REQ-313：用户追加并明确选择“插件名改为 xy-workflow，对外短指令也统一 xy-*”。保留既有 xy-* 内置名称；配置入口为 xy-config，精选入口为 xy-grill-me（显式）、xy-grilling（PM 自动）、xy-taste、xy-playwright。Codex／Claude 命名空间按官方格式为 xy-workflow，第三方 canonical 名称、正文、包 metadata 与许可证不改。
+- REQ-313：用户追加并明确选择“插件名改为 xy-workflow，对外短指令也统一 xy-*”。保留既有 xy-* 内置名称；配置入口为 xy-config，当时的精选入口为 xy-grill-me（显式）、xy-grilling（PM 自动）、xy-taste、xy-playwright。Codex／Claude 命名空间按官方格式为 xy-workflow，第三方 canonical 名称、正文、包 metadata 与许可证不改。
 - REQ-314：命名调整覆盖真实官方清单、角色／命令入口、打包与分发验证、配置组件识别和必要偏好身份处理；保留现有用户／项目模型偏好、项目资料与本地数据目录，不顺带改 GitHub 仓库地址或做 2.0 兼容迁移。旧 3.0 插件切换使用官方客户端，在任务收尾后进行；本轮实施期间不替换正在使用的物理资源。
 - REQ-315：三端发行包直接发现官方 `agent-desktop` Skill 并携带两个 macOS 架构的同版 CLI 与 helper。保留上游名称、正文、许可证和二进制原字节，记录固定提交、发行资产摘要及执行位。用户安装插件后即可使用配套 CLI，macOS 系统权限归宿主和用户控制。
 - REQ-316：`xy-desktop` 与 `xy-qa` 只在项目验证确需真实桌面能力、权限和任务范围匹配时选择该工具。确认应用、窗口、控件和业务对象，操作后回读。使用相邻条目的隔离用例核对成功与拒绝路径，区分实际 GUI 证据与包静态验证。现有 Web、移动和原型验收路径继续适用。
-- REQ-317：Taste 保留官方原版和现有 `xy-taste` 发现入口，按实际适用设计任务选择。沿用既有设计系统的局部任务可直接消费项目规范，选中后按既有合同完整读取；解除 Claude 的 Taste 无条件预载。
-- REQ-318：保留缺失、篡改和来源验证，合并 Taste 文档及入口重复说明，分段读取仅核对本次消费的受管文件、锁与必要来源。显式全包检查继续可用，回归验证无关依赖读取、范围连续性和目标损坏拒绝。
+- REQ-317（历史，已由 REQ-324 接续）：Taste 曾保留官方原版和现有 `xy-taste` 发现入口，按实际适用设计任务选择。沿用既有设计系统的局部任务可直接消费项目规范，选中后按既有合同完整读取；解除 Claude 的 Taste 无条件预载。
+- REQ-318：保留缺失、篡改和来源验证；此前已合并 Taste 文档及入口重复说明，分段读取仅核对本次消费的受管文件、锁与必要来源。显式全包检查继续可用，回归验证无关依赖读取、范围连续性和目标损坏拒绝。
 - REQ-319：同一实例只需取得一次当前宿主适配说明。独立使用核心技能时能可靠定位该说明，三个宿主均保留角色权限与来源验证。桌面 Skill 使用公开原名。
 - REQ-320：按实际所选技能逐文件取回有界正文。输出截断时从上次确认的位置续读，按来源和版本区分已读内容。以四份文件、中途截断及来源变化验证。
 - REQ-321：浏览器取证有缺口时选择 Playwright。需要交付具体 HTML 原型时执行原型验证。纯逻辑与仅维护设计规范的任务按各自需要读取技能。验收覆盖三个宿主的实际发行包和独立 QA。
 - REQ-322：在另一台电脑首次安装 Claude 插件时，使用官方市场与用户级安装，并让该电脑用户一次选择是否保存限定范围的 Auto 来源说明。多个项目和同源重复安装复用这一选择。验收覆盖干净用户目录、已有设置、拒绝、同名不同来源及第二个项目。
 - REQ-323：Claude 首次需要运行本地插件工具时，先按官方登记核实安装来源、版本与实际目录。仅需消费精选技能正文时使用已校验的当前来源，避免整包重复扫描。来源变化或权限拒绝后遵循宿主判断。用隔离注册安装的原型委托核对实际行为。
+- REQ-324：三个宿主的 `xy-uiux` 可按需选用 `xy-impeccable`。随包保留官方正式分发的 Markdown 原文、适用参考、Apache-2.0 LICENSE 与 NOTICE.md。按文件验证来源及摘要后分页读取，本入口仅用于离线设计方法；原型沿用既有静态验证。候选删除原 Taste 入口及其资源。
 
 保留合同：用户再次明确“文档记忆优先，配合 agentmemory”。现有可选增强、按需召回、严格项目隔离与溯源、文档和明确批准优先的合同不删除。独立只读评估确认本项目 ID 仍是模板占位符，当前工具注册信息尚不足以证明服务端项目隔离，因此本轮不召回／保存、不声称已实际使用；这不阻断工作流或精选技能交付，也不转化为安装／重构记忆服务任务。
 
@@ -57,9 +60,9 @@
 
 固定上游原版、锁定声明、离线资源校验与工作流薄适配各有单一归属：构建只读本地已审原版；工作流覆盖、调度、确认和交接归适配层。依赖与流程作者按精确文件归属协作，纯偏好读取由独立配置核心投影，唯一 QA 集成验收。没有 UI 变更或新增原型批准。
 
-本轮以既有精选依赖锁与资源装配为唯一来源。Vercel Agent Desktop 使用 [v1.3.1 官方发行](https://github.com/vercel-labs/agent-desktop/releases/tag/v1.3.1)，将同一份上游 Skill 投影到原生发现路径，从当前物理插件根定位匹配 macOS 架构的官方程序。Taste 的按需规则归共享 Skill 选择合同，同源入口负责校验和读取。
+本轮以既有精选依赖锁与资源装配为唯一来源。Vercel Agent Desktop 使用 [v1.3.1 官方发行](https://github.com/vercel-labs/agent-desktop/releases/tag/v1.3.1)，将同一份上游 Skill 投影到原生发现路径，从当前物理插件根定位匹配 macOS 架构的官方程序。Impeccable 的按需规则归共享 Skill 选择合同，同源入口负责校验与分页读取正文和所需参考。
 
-Grill Me 固定来源为 `mattpocock/skills@5863806dd4e15c63174bee4e7515a4256792ecfa`，仅两个必要 Skill 目录及 LICENSE；Taste 为 `Leonxlnx/taste-skill@f6b76575f949707b4e3c37cd86cb44b0b98643e8`，完整技能目录及 LICENSE，资产原始 credits 保留。
+Grill Me 固定来源为 `mattpocock/skills@5863806dd4e15c63174bee4e7515a4256792ecfa`，仅两个必要 Skill 目录及 LICENSE。Impeccable 固定为 `pbakaus/impeccable@b49177d32788f2dc585c42831d845dacf1ebed2c`（4.10.0）。锁记录源码归档摘要与逐文件摘要。闭包来自正式分发目录 `plugin/skills/impeccable/SKILL.md` 及其 `reference/` Markdown，另含仓库根 LICENSE 和 NOTICE.md。
 
 Playwright 追加采用官方已发布 @playwright/cli@0.1.24 及其精确的 playwright、playwright-core@1.66.0-alpha-1794252756000 闭包；运行时 alpha 名称如实保留，不与用户已有 0.1.18 混用。三份官方包保持原版文件、许可证与 NOTICE，随插件提供标准 Node 模块布局和薄启动器，不依赖全局 npm 安装。其内置的完整 Skill 与当前本机 Skill 一致，来源和运行版本以发行包锁定为准。
 
@@ -68,7 +71,7 @@ Playwright 追加采用官方已发布 @playwright/cli@0.1.24 及其精确的 pl
 ### 上游与官方资料
 
 - Grill Me：https://github.com/mattpocock/skills
-- Taste：https://github.com/Leonxlnx/taste-skill
+- Impeccable 正式分发来源：[锁定提交](https://github.com/pbakaus/impeccable/tree/b49177d32788f2dc585c42831d845dacf1ebed2c/plugin/skills/impeccable)
 - Playwright CLI：https://github.com/microsoft/playwright-cli
 - Playwright CLI 安装：https://playwright.dev/agent-cli/installation
 - Claude 子代理：https://code.claude.com/docs/en/sub-agents
@@ -77,7 +80,7 @@ Playwright 追加采用官方已发布 @playwright/cli@0.1.24 及其精确的 pl
 
 ## 当前进展与恢复入口
 
-当前迭代的确认依据为用户「内置……不用在自己实现 xy-agent-desktop」和「开始优化, 将agent-desktop 内置」。源码与本地候选已通过独立 QA，现有正式安装仍使用 3.0.7。
+此前桌面工具迭代的确认依据为用户「内置……不用在自己实现 xy-agent-desktop」和「开始优化, 将agent-desktop 内置」。源码与本地候选已通过独立 QA，验收当时的正式安装使用 3.0.7。
 
 已验证：精选资源、三端实际候选与包外消费、Playwright 真实 HTTP 最小闭环、命名／身份与发布权限修复，已随 alpha.9 发布并完成本机三端核验。
 
@@ -91,7 +94,7 @@ Playwright 追加采用官方已发布 @playwright/cli@0.1.24 及其精确的 pl
 - Claude 首次安装使用单文件终端入口与官方用户级安装命令。用户自愿确认后，当前电脑的项目共用限定范围的 Auto 来源说明。macOS 上 Claude Code 2.1.311 在空白用户目录安装本地候选，两项目回读同一条说明。9 项针对性用例和原独立 Reviewer 的复验通过，覆盖确认期间来源变更与并发编辑。Linux 原生运行与实际业务会话中的分类器决定仍待现场验证。[首次安装验收](../../dist/evidence/selected-upstream-skills/claude-first-install-20261119/qa-result.json)
 - Grill Me 的两个短 Markdown 在构建时校验并随原生技能入口提供。独立 QA 核对了三宿主的六处正文投影及各自的固定来源。隔离用户安装的 Claude 实际直接加载了 `xy-grilling`，随后通过官方登记核对了市场和插件缓存。宿主仍拒绝从临时缓存执行项目检查，当次原型委托停在该步骤。[真实会话取证摘要](../../dist/evidence/selected-upstream-skills/claude-source-20261119/registered-model-observed.json)
 - 当前候选的 Codex、Claude Code 与 Antigravity 均携带官方原名 `agent-desktop`、许可证和文档。Apple Silicon 与 Intel 的 CLI、helper 文件原字节及执行位通过常规候选、local-source 和暂存发行树核验。Apple Silicon 的 macOS「终端」实际只点击同名相邻条目中的指定对象并回读成功；Intel 完成二进制与包校验，原生运行待验证。
-- Taste 按任务适用性选择，Claude 取消无条件预载。定向分段读取的 UTF-8 区间、错误映射和目标来源校验均通过回归；无关依赖缺失仍允许读取选定内容，显式全包校验和缺失执行位拒绝均有效。
+- 该次验收时，Taste 已改为按任务适用性选择，Claude 已取消无条件预载。定向分段读取的 UTF-8 区间、错误映射和目标来源校验均通过回归；无关依赖缺失仍允许读取选定内容，显式全包校验和缺失执行位拒绝均有效。
 - 精选资源及发行相关用例 69 项通过、1 项因当前 Codex 环境无法运行官方隔离验证而跳过，角色和流程合同 20 项通过。唯一独立 QA 接受 33 路径冻结差异 `ca6f6e601e977f8e3a3ac3f96da864e3e84496e4fb4e907f58f08926b2904db9`。本轮回执、复验日志和摘要见[本地验收证据](../../dist/evidence/selected-upstream-skills/desktop-20261119/evidence.sha256)。
 
 ### 既往发行验收

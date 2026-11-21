@@ -121,7 +121,7 @@ def _selected_read_verifier() -> Callable[[str, str], None]:
             raise ValueError("selected skill package source digest mismatch: " + relative)
 
     # 包初始化与身份声明也是实际导入闭包的一部分。必须在第一次导入产品模块或
-    # 读取器之前核验，避免篡改的别名模块将合法的 xy-taste 解析为另一篇合法正文。
+    # 读取器之前核验，避免篡改的别名模块将合法的 xy-impeccable 解析为另一篇合法正文。
     for relative in ("plugins/source_pack.py", "lib/__init__.py", "lib/skills/__init__.py",
                      "lib/skills/selected_skills.py", "lib/skills/role_skills.py", "product/__init__.py",
                      "product/command_identity.py", "product/command_identity.json"):

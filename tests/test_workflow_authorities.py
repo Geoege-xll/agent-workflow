@@ -1078,7 +1078,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
         """内部规划与第三方原版分离，不能通过伪本地Grill Me隐藏二级primitive。"""
         from lib.skills.role_skills import CORE_SKILLS, PM_SKILLS, SELECTED_SKILLS
         self.assertNotIn("grill-me", CORE_SKILLS)
-        self.assertEqual({"xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"}, set(SELECTED_SKILLS))
+        self.assertEqual({"xy-grill-me", "xy-grilling", "xy-impeccable", "xy-playwright"}, set(SELECTED_SKILLS))
         self.assertEqual(("xy-grilling",), PM_SKILLS)
         self.assertIn("xy-plan", CORE_SKILLS)
         canonical = PACK / "third_party/selected-skills/grill-me/skills/productivity"

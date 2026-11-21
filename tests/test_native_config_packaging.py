@@ -400,7 +400,7 @@ class StandalonePackageTest(unittest.TestCase):
         identity.write_text(json.dumps(approved, sort_keys=True))
         self.assertEqual(load_identity(source), approved)
         for field, value in (("schema_version", True), ("plugin_name", "other-plugin"),
-                             ("skill_aliases", {**approved["skill_aliases"], "xy-taste": "grill-me"}),
+                             ("skill_aliases", {**approved["skill_aliases"], "xy-impeccable": "grill-me"}),
                              ("managed_roles", approved["managed_roles"][:-1] + ["xy-unknown"]),
                              ("legacy_plugin_name", "other-legacy"),
                              ("marketplaces", {"alpha": "other-alpha", "local": "xy-workflow-local"})):

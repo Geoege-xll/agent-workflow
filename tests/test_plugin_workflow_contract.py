@@ -163,33 +163,35 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 workflow = policy.read_instruction_contract(root, "skills/xy-workflow/SKILL.md")
                 intake = (root / "skills/xy-workflow/references/requirements-intake.md").read_text(encoding="utf-8")
                 design = (root / "skills/xy-ui-design/SKILL.md").read_text(encoding="utf-8")
-                adapter = (root / "skills/xy-taste/SKILL.md").read_text(encoding="utf-8")
-                original = root / "third_party/selected-skills/taste/skills/taste-skill/SKILL.md"
+                adapter = (root / "skills/xy-impeccable/SKILL.md").read_text(encoding="utf-8")
+                original = root / "third_party/selected-skills/impeccable/plugin/skills/impeccable/SKILL.md"
                 self.assertIn("requirements_provider: xy-grilling", workflow)
                 self.assertIn("`grill-me` 是上游用户显式入口", intake)
                 self.assertIn("不是上游 Grill Me 的 schema", intake)
                 self.assertIn("同一已验证插件", intake)
-                # 分页合同只存在于真实包的共享规则。先验整包或重新把 Taste 写成固定依赖，
+                # 分页合同只存在于真实包的共享规则。先验整包或重新把 Impeccable 写成固定依赖，
                 # 会让沿用现有设计系统的局部任务被无关资源阻断。
                 selection_path = "platforms/shared/skills/xy-workflow/references/skill-selection.md"
                 selection = (root / selection_path).read_text(encoding="utf-8")
-                taste_policy = selection.split("## Taste design guidance", 1)[1].split("\n## ", 1)[0]
+                design_policy = selection.split("## Impeccable design guidance", 1)[1].split("\n## ", 1)[0]
                 for boundary in ("next_offset", "eof", "sha256", "total_bytes",
-                                 "selected-skills read xy-taste", str(original.relative_to(root))):
-                    self.assertIn(boundary, taste_policy)
-                self.assertNotRegex(taste_policy, r"(?m)^bash .*selected-skills check\b")
-                self.assertIn(selection_path + "#taste-design-guidance", adapter)
+                                 "selected-skills read xy-impeccable", str(original.relative_to(root))):
+                    self.assertIn(boundary, design_policy)
+                self.assertNotRegex(design_policy, r"(?m)^bash .*selected-skills check\b")
+                self.assertIn(selection_path + "#impeccable-design-guidance", adapter)
                 self.assertNotIn("selected-skills read", adapter)
                 self.assertNotIn(b"hooks:", builder.split_frontmatter(adapter.encode())[0])
-                self.assertGreater(len(builder.split_frontmatter(original.read_bytes())[1]), 24000)
+                self.assertIn(b"name: impeccable", builder.split_frontmatter(original.read_bytes())[0])
+                for guidance in ("--reference reference/layout.md", "引擎", "hooks", "静态原型验收"):
+                    self.assertIn(guidance, design_policy)
                 # 原版仍在非发现目录，默认原型必须保留静态验收和截图禁令。
                 self.assertIn("Do not automate prototype browser operations by", design)
                 self.assertIn("Do not generate, save, attach, or present screenshots", " ".join(design.split()))
                 self.assertNotIn("ui-ux-pro-max", workflow + intake + design)
                 for path in ("roles/xy-uiux.md", "product/AGENT_SCHEMA.md", "product/ROLES.yaml",
                              "product/WORKFLOW.md", "skills/xy-workflow/references/ui-design.md"):
-                    self.assertNotIn("xy-taste", (root / path).read_text(encoding="utf-8"))
-                self.assertNotIn("xy-taste", (root / "platforms/shared/skills/xy-ui-design/SKILL.md").read_text(encoding="utf-8"))
+                    self.assertNotIn("xy-impeccable", (root / path).read_text(encoding="utf-8"))
+                self.assertNotIn("xy-impeccable", (root / "platforms/shared/skills/xy-ui-design/SKILL.md").read_text(encoding="utf-8"))
 
     def test_all_roles_resolve_one_shared_skill_selection_authority(self):
         """沿三端已装配 WORKFLOW 的真实链接读取权威，防止只有实现角色能消费新规则。"""
@@ -241,7 +243,7 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 self.assertEqual(expected.decode("utf-8"), page["text"])
                 # 按需入口可由宿主发现；原生角色和 PM 的固定预载不得在任务选择前引入。
                 # 消费包内真实角色CLI与宿主frontmatter，避免只检查源码绑定常量。
-                candidates = ("xy-web-guidance", "xy-apple-guidance", "xy-taste", "agent-desktop",
+                candidates = ("xy-web-guidance", "xy-apple-guidance", "xy-impeccable", "agent-desktop",
                               "xy-playwright", "xy-prototype-verify")
                 for candidate in candidates:
                     header, _ = builder.split_frontmatter((root / "skills" / candidate / "SKILL.md").read_bytes())
@@ -317,7 +319,7 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 self.assertIn("Invoke `$xy-prototype-verify` to validate static path readiness", role_text["xy-uiux"])
                 # 原版桌面 Skill 是唯一直接发现的上游入口，其余精选 Skill 继续使用项目薄入口。
                 discovered = {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
-                self.assertTrue({"xy-config", "xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright",
+                self.assertTrue({"xy-config", "xy-grill-me", "xy-grilling", "xy-impeccable", "xy-playwright",
                                  "agent-desktop"} <= discovered)
                 self.assertEqual({"agent-desktop"}, {name for name in discovered if not name.startswith("xy-")})
                 self.assertNotIn("xy-agent-desktop", discovered)

@@ -43,7 +43,7 @@ class PluginMaintenanceContractTest(unittest.TestCase):
             "xy-qa-review", "xy-workflow", "xy-code-standards", "xy-ui-design",
         }
         conditional_guidance = {"xy-web-guidance", "xy-apple-guidance", "xy-mobile-ui"}
-        selected_skills = {"xy-grill-me", "xy-grilling", "xy-taste", "xy-playwright"}
+        selected_skills = {"xy-grill-me", "xy-grilling", "xy-impeccable", "xy-playwright"}
         self.assertEqual(base_skills | conditional_guidance, set(CORE_SKILLS))
         self.assertEqual(selected_skills, set(SELECTED_SKILLS))
         self.assertNotIn("xy-config", CORE_SKILLS)
