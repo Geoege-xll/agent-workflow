@@ -1,6 +1,6 @@
 """从 AGY 主会话的本机原生记录核对本次领取对应的创建回执。"""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
@@ -17,10 +17,11 @@ from lib.safe_text import open_file, read_file
 from lib.task_graph import TaskGraphError
 
 
-# 1.5.13 的回执没有可跨并行工具定位的 call ID，只认单一调用、紧邻且连续的结果。
+# AGY 回执没有可跨并行工具定位的 call ID。CLI 核对单一调用；App 也接受已核实的界面状态更新与创建顺序。
 # Created/Completed 是宿主附加的时间行；命令输出和聊天的相同文字不能作为回执。
 _MARKER = "XY-WORKFLOW-CLAIM "
 _RECEIPT_HEADER = re.compile(r"(?:(?:Created|Completed) At: [0-9T:+.Z-]+\n)*Created the following subagent:\n")
+_UPDATE_ACK = re.compile(r"(?:Created At: [0-9T:+.Z-]+\nCompleted At: [0-9T:+.Z-]+\n){2}OK")
 _RECEIPT_FOOTER = ("\nThe subagent will send you a message when it has completed its task or requires guidance. "
                    "There is no need to poll for its response.")
 _LOG = Path(".system_generated/logs/transcript.jsonl")
@@ -46,23 +47,26 @@ def dispatch_marker(root: Path, target: dict, basis: str, claim: dict) -> str:
     return _MARKER + hashlib.sha256(body).hexdigest()
 
 
-def _brain() -> Path:
+def _brain_roots() -> tuple[Path, Path]:
     # shell 可以重设 HOME；用户可写项目及调用者提供的 HOME 不能取得宿主日志权威。
-    # 当前核实的是使用系统账户目录的 POSIX AGY CLI；别的平台缺少证据时保留占用。
+    # POSIX 下只认系统账户中的 App 和 CLI 原生日志目录。
     if os.name != "posix":
         raise TaskGraphError("AGY native transcript location is unverified on this platform")
     import pwd
-    return Path(pwd.getpwuid(os.getuid()).pw_dir) / ".gemini/antigravity-cli/brain"
+    gemini = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".gemini"
+    return gemini / "antigravity/brain", gemini / "antigravity-cli/brain"
 
 
 def session_origin(event):
     """身份只读宿主指定会话的首条原生事件，首条工具输出或普通聊天均不能充当派发。"""
     current = event["conversationId"]
     parent_id("antigravity:" + current)
-    directory = _brain() / current
     path = Path(event["transcriptPath"])
-    if path not in (directory / _FULL_LOG, directory / _LOG):
-        raise ValueError("缺少当前 AGY CLI 会话来源")
+    for brain in _brain_roots():
+        if path in (brain / current / _FULL_LOG, brain / current / _LOG):
+            break
+    else:
+        raise ValueError("缺少当前 AGY 会话来源")
     with open_file(path) as stream:
         if stream is None:
             raise ValueError("宿主尚未写入会话来源")
@@ -70,7 +74,7 @@ def session_origin(event):
     if first.get("step_index") != 0 or first.get("status") != "DONE":
         raise ValueError("缺少原生首条消息")
     if (first.get("type"), first.get("source")) == ("USER_INPUT", "USER_EXPLICIT"):
-        return current, None, None
+        return current, None, None, brain
     if (first.get("type"), first.get("source")) != ("SYSTEM_MESSAGE", "SYSTEM"):
         raise ValueError("无法识别原生派发身份")
     header = re.search(r"\n<SYSTEM_MESSAGE>\n\[Message\] timestamp=\S+ sender=(\S+) priority=\S+ content=", first["content"])
@@ -80,7 +84,7 @@ def session_origin(event):
     validate_child_id(parent, current)
     lines = first["content"][header.end():].splitlines()
     markers = [line for line in lines if line.startswith(_MARKER)]
-    return current, parent, markers[0] if len(markers) == 1 else None
+    return current, parent, markers[0] if len(markers) == 1 else None, brain
 
 
 def _matches_role(selector: str, role: str, prompt: str) -> bool:
@@ -115,17 +119,52 @@ def _field_complete(event: dict, required: str) -> bool:
     )
 
 
-def _dispatch_step(event: dict, marker: str, role: str, *, full: bool) -> int | None:
+def _display_argument(call, name: str, key: str, *, full: bool):
+    if not isinstance(call, dict) or call.get("name") != name:
+        return None
+    args = call.get("args")
+    if not isinstance(args, dict) or args.keys() != {key}:
+        return None
+    value = args[key]
+    if full:
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return json.loads(value)
+    except (ValueError, RecursionError):
+        return None
+
+
+def _steps_update(call, *, full: bool) -> bool:
+    steps = _display_argument(call, "update_steps", "steps", full=full)
+    return isinstance(steps, list) and bool(steps) and all(
+        isinstance(step, dict) and step.keys() == {"status", "title"}
+        and step["status"] in ("pending", "in_progress", "done")
+        and isinstance(step["title"], str) and bool(step["title"].strip()) for step in steps
+    )
+
+
+def _focus_update(call, *, full: bool) -> bool:
+    focus = _display_argument(call, "update_focus", "focus", full=full)
+    return isinstance(focus, str) and 0 < len(focus) <= 512 and bool(focus.strip()) and focus.isprintable()
+
+
+def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool) -> tuple[int, int] | None:
     calls = event.get("tool_calls")
-    if (event.get("type") != "PLANNER_RESPONSE" or not isinstance(calls, list)
-            or len(calls) != 1 or not isinstance(calls[0], dict) or calls[0].get("name") != "invoke_subagent"):
+    if (event.get("type") != "PLANNER_RESPONSE" or not isinstance(calls, list) or not 1 <= len(calls) <= 3
+            or not _field_complete(event, "tool_calls")):
         return None
-    args = calls[0].get("args")
+    updates = len(calls) - 1
+    # App 的实际批次先更新任务清单，再可选刷新焦点，最后只有一次创建调用。
+    if updates and (not app or not _steps_update(calls[0], full=full)
+                    or (updates == 2 and not _focus_update(calls[1], full=full))):
+        return None
+    create = calls[-1]
+    if not isinstance(create, dict) or create.get("name") != "invoke_subagent":
+        return None
+    args = create.get("args")
     if not isinstance(args, dict) or not all(isinstance(args.get(key), str) for key in ("Prompt", "TypeName")):
-        return None
-    # 短日志通常自报截断；即使完整日志也明示工具调用被裁切，一条可见标记
-    # 仍不能证明原提示词只有这一条。两种来源都只能核验未被裁切的调用。
-    if not _field_complete(event, "tool_calls"):
         return None
     prompt, selector = args["Prompt"], args["TypeName"]
     if not full:
@@ -137,7 +176,7 @@ def _dispatch_step(event: dict, marker: str, role: str, *, full: bool) -> int | 
     # 完整日志的参数是直接字符串。两个来源各按自己的格式读，禁止混用或猜测解码。
     if (isinstance(prompt, str) and [line for line in prompt.splitlines() if line.startswith(_MARKER)] == [marker]
             and _matches_role(selector, role, prompt)):
-        return event["step_index"]
+        return event["step_index"] + 1, updates
     return None
 
 
@@ -168,18 +207,34 @@ def _parent_transcript(directory: Path):
         yield stream, False
 
 
-def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, role: str) -> None:
+def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, role: str, *,
+                    brain: Path | None = None) -> None:
     from lib.skills.role_skills import ROLE_SKILLS
     if role not in ROLE_SKILLS:
         raise TaskGraphError("AGY dispatch requires a role defined by the current workflow package")
     validate_child_id(parent, agent_id)
-    brain = _brain()
-    # 即使父会话证据来自完整日志，宿主回执内的子会话 URI 仍指向短日志。
-    child_log = brain / agent_id / _LOG
+    app_root, cli_root = _brain_roots()
+    roots = (app_root, cli_root)
+    if brain is not None:
+        if brain not in roots:
+            raise TaskGraphError("AGY transcript root is unverified; retain the claim")
+        roots = (brain,)
     try:
-        with _parent_transcript(brain / parent) as (stream, full):
-            if stream is None:
+        with ExitStack() as stack:
+            # Hook 只查当前子会话所在的客户端。首次绑定没有 Hook 提供的来源，
+            # 需要确认父会话日志只出现于一个目录，选择后不再到另一处找回执。
+            selected = None
+            for root in roots:
+                stream, full = stack.enter_context(_parent_transcript(root / parent))
+                if stream is not None:
+                    if selected is not None:
+                        raise TaskGraphError("AGY parent transcript exists in both App and CLI; retain the claim")
+                    selected = stream, full, root
+            if selected is None:
                 raise TaskGraphError("AGY parent transcript is unavailable; retain the claim")
+            stream, full, root = selected
+            # 即使父会话证据来自完整日志，宿主回执内的子会话 URI 仍指向短日志。
+            child_log = root / agent_id / _LOG
             # 读取打开瞬间的有界尾部快照，避开持续追加和巨大历史。截断处不是完整事件；
             # 只在相邻的已完成、同源事件上配对，解析异常或未知格式绝不能沿用前一步。
             size = os.fstat(stream.fileno()).st_size
@@ -201,11 +256,15 @@ def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, ro
                         or event.get("status") != "DONE" or type(event.get("step_index")) is not int):
                     pending = None
                     continue
-                if (pending is not None and event["step_index"] == pending + 1 and event.get("type") == "GENERIC"
-                        and isinstance(event.get("content"), str) and _field_complete(event, "content")
-                        and _matches_receipt(event["content"], agent_id, child_log, workspace)):
-                    return
-                pending = _dispatch_step(event, marker, role, full=full)
+                if (pending is not None and event["step_index"] == pending[0] and event.get("type") == "GENERIC"
+                        and isinstance(event.get("content"), str) and _field_complete(event, "content")):
+                    next_step, remaining_updates = pending
+                    if remaining_updates and _UPDATE_ACK.fullmatch(event["content"]):
+                        pending = next_step + 1, remaining_updates - 1
+                        continue
+                    if not remaining_updates and _matches_receipt(event["content"], agent_id, child_log, workspace):
+                        return
+                pending = _dispatch_step(event, marker, role, full=full, app=root == app_root)
     except TaskGraphError:
         raise
     except (OSError, ValueError) as exc:
@@ -285,6 +344,15 @@ class AntigravityDispatch(DispatchPolicy):
         if self.pm_id is None:
             raise TaskGraphError("AGY dispatch requires a claim through the current PM task pool")
         parent_id(self.pm_id)
+
+    def check_claim_target(self, root: Path, payload: dict, task: dict) -> None:
+        from lib.foundation_qa import is_ordinary_reviewer
+        from lib.task_graph_cli import export_task_pack
+
+        # 普通 Full 必须先冻结实际 Writer 差异。分阶段和隔离任务仍由原检查点及
+        # 集成合同决定，不让 AGY 把接纳时才发现的问题留到子会话运行后。
+        if is_ordinary_reviewer(task) and task["request_id"] not in payload.get("worktree_integrations", {}):
+            export_task_pack(payload, task["id"], root=root, require_current_qa=True)
 
     def claim_fields(self, root: Path, target: dict, basis: str) -> tuple[dict, dict]:
         self.check_pool_claim()

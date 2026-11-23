@@ -8,6 +8,7 @@ import http.client
 import json
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -434,9 +435,14 @@ class PackagedTaskPoolTest(unittest.TestCase):
                     task["agent_ref"]["agent_id"] = child
                     original.write_bytes(before)
 
-    def test_antigravity_light_example_validates_and_claims_from_the_installed_guide(self):
+    def test_antigravity_app_completes_registered_light_writer_from_the_installed_guide(self):
         host = "antigravity"
         installed = self.plugins[host]
+        context_path = "plugins/antigravity/plugin-context.md"
+        reference = "platforms/antigravity/references/pm-integration.md"
+        self.assertIn(context_path, (installed / "rules/AGENTS.md").read_text(encoding="utf-8"))
+        self.assertIn(reference + "#writer-completion", (installed / context_path).read_text(encoding="utf-8"))
+        completion = (installed / reference).read_text(encoding="utf-8").split('<a id="writer-completion"></a>', 1)[1]
         guide = (installed / "skills/xy-workflow/references/dispatch.md").read_text(encoding="utf-8")
         section = guide.split('<a id="light-non-ui-pack"></a>', 1)[1]
         template = section.split("```json\n", 1)[1].split("\n```", 1)[0]
@@ -448,11 +454,21 @@ class PackagedTaskPoolTest(unittest.TestCase):
                                   cwd=self.project, env=self.env, text=True, capture_output=True, timeout=30)
         self.assertEqual(0, resource.returncode, resource.stderr)
         pack = json.loads(template.replace("<rules-sha256>", json.loads(resource.stdout)["sha256"]))
-        pack["task"]["input_contracts"] = ["测试用户明确委托修复 total([]) 并覆盖回归。"]
-        path = self.workspace / "total.json"
+        task = pack["task"]
+        task["input_contracts"] = ["测试用户明确委托修复 total([]) 并覆盖回归。"]
+        pm = self.agy_pm.split(":")[1]
+        start = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"}
+        parent_log = self.agy_log(pm, start, app=True).with_name("transcript.jsonl")
+        scratch = Path(self.host_delivery(host, parent_log, GRAPH, "scratch", "--root", self.project,
+                                         "--request-id", task["request_id"])["scratch_dir"])
+        path = scratch / "total.json"
+        self.assertEqual("allow", self.hook_decision(parent_log, "write_file", {"Path": str(path)}))
+
         def claim(code):
-            return self.pool(host, "claim", "--register", "--record", path, "--request-id", pack["task"]["request_id"],
-                             "--task-id", pack["task"]["id"], "--expect-sha256", digest(path), *CAPACITY, code=code)
+            return self.host_delivery(host, parent_log, POOL, "claim", "--root", self.project, "--pm-id", self.agy_pm,
+                                      "--register", "--record", path, "--request-id", task["request_id"],
+                                      "--task-id", task["id"], "--expect-sha256", digest(path), *CAPACITY, code=code)
+
         self.assertEqual([], pack["approved_gates"])
         path.write_text(json.dumps(pack, ensure_ascii=False), encoding="utf-8")
         self.assertIn("approvals", claim(2)["error"])
@@ -462,9 +478,73 @@ class PackagedTaskPoolTest(unittest.TestCase):
         result = claim(0)
         self.assertEqual("claimed", result["status"])
         self.assertRegex(result["dispatch_marker"], r"^XY-WORKFLOW-CLAIM [0-9a-f]{64}$")
+        claim_sha = digest(path)
 
-    def agy_log(self, identifier, *events, short_events=None):
-        location = self.workspace / "agy-account/.gemini/antigravity-cli/brain" / identifier / ".system_generated/logs"
+        child = str(uuid4())
+        marker = result["dispatch_marker"]
+        child_start = {"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                       "content": f"\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender={pm} "
+                                  f"priority=MESSAGE_PRIORITY_HIGH content={marker}\n执行当前任务\n</SYSTEM_MESSAGE>"}
+        child_log = self.agy_log(child, child_start, app=True).with_name("transcript.jsonl")
+        parent_log = self.agy_parent_log(pm, child_log, marker, task["role"], self.project,
+                                         app=True, with_steps=True).with_name("transcript.jsonl")
+        receipt = scratch / "claim.json"
+        receipt.write_text(json.dumps(result), encoding="utf-8")
+        bound = self.host_delivery(host, parent_log, POOL, "bind", "--root", self.project, "--pm-id", self.agy_pm,
+                                   "--receipt", receipt, "--host", host, "--agent-id", child)
+
+        # Assert the exact packaged host command shape described to PM and use the same argv after PreToolUse.
+        def recipe(fragment, **slots):
+            line = next(line for line in completion.splitlines() if line.startswith("bash ") and fragment in line)
+            for placeholder, value in {"plugin-root": installed, "project-root": self.project, **slots}.items():
+                line = line.replace(f"<{placeholder}>", str(value))
+            return shlex.split(line)
+
+        view = recipe(f"{POOL} view", **{"parent-uuid": pm, "request-id": task["request_id"]})
+        running = self.host_command(host, parent_log, view)
+        self.assertEqual([], running["errors"])
+        self.assertEqual(1, len(running["tasks"]))
+        row = running["tasks"][0]
+        self.assertEqual((str(path), task["id"], "RUNNING", True, bound["agent_ref"]),
+                         (row["record"], row["task_id"], row["state"], row["active"], row["agent_ref"]))
+
+        (self.project / "tests").mkdir()
+        (self.project / "src/totals.py").write_text("def total(values):\n    return sum(values)\n", encoding="utf-8")
+        (self.project / "tests/test_totals.py").write_text(
+            "from unittest import TestCase\nfrom src.totals import total\n\n"
+            "class TotalsTest(TestCase):\n"
+            "    def test_empty(self):\n        self.assertEqual(0, total([]))\n"
+            "    def test_nonempty(self):\n        self.assertEqual(3, total([1, 2]))\n", encoding="utf-8")
+        check = task["verification_commands"][0]
+        self.assertEqual("allow", self.hook_decision(child_log, "run_command", {"CommandLine": check}))
+        worker_check = subprocess.run([sys.executable, *shlex.split(check)[1:]], cwd=self.project, env=self.env,
+                                      capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, worker_check.returncode, worker_check.stderr)
+        self.assertIn("Ran 2 tests", worker_check.stderr)
+        evidence = f"{check} (exit {worker_check.returncode})\n{worker_check.stderr}"
+        patch = scratch / "writer-result.json"
+        self.assertEqual("allow", self.hook_decision(parent_log, "write_file", {"Path": str(patch)}))
+        example = completion.split("```json\n", 1)[1].split("\n```", 1)[0]
+        patch_json = example.replace("<task-id>", row["task_id"]).replace('"<accepted-build-verification>"',
+                                                                           json.dumps(evidence, ensure_ascii=False))
+        patch.write_text(patch_json, encoding="utf-8")
+        update_slots = {"record": row["record"], "patch-file": patch}
+        update = recipe(f"{GRAPH} update", **update_slots, **{"record-sha256": row["sha256"]})
+        self.host_command(host, child_log, update, denied=True)
+        stale = recipe(f"{GRAPH} update", **update_slots, **{"record-sha256": claim_sha})
+        self.assertIn("fingerprint differs", self.host_command(host, parent_log, stale, code=2)["error"])
+        self.assertEqual(row["sha256"], digest(path))
+        updated = self.host_command(host, parent_log, update)
+        self.assertTrue(updated["updated"])
+        settled = self.host_command(host, parent_log, view)
+        self.assertEqual([], settled["errors"])
+        self.assertEqual([{**row, "sha256": updated["sha256"], "state": "BUILD_VERIFIED", "active": False}],
+                         settled["tasks"])
+        self.assertEqual([*task["acceptance_evidence"], evidence], task_in(path)["acceptance_evidence"])
+
+    def agy_log(self, identifier, *events, short_events=None, app=False):
+        client = "antigravity" if app else "antigravity-cli"
+        location = self.workspace / "agy-account/.gemini" / client / "brain" / identifier / ".system_generated/logs"
         location.mkdir(parents=True, exist_ok=True)
         for name, rows in (("transcript.jsonl", events if short_events is None else short_events),
                            ("transcript_full.jsonl", events)):
@@ -513,11 +593,14 @@ class PackagedTaskPoolTest(unittest.TestCase):
         command = ["bash", str(plugin / "lib/python_runtime.sh"), "-B", "-X", "utf8",
                    str(plugin / "plugins/source_pack.py"), "helper", "--project", str(self.project),
                    helper, *map(str, args)]
+        return self.host_command(host, transcript, command, denied=denied, code=code)
+
+    def host_command(self, host, transcript, command, *, denied=False, code=0):
         if host == "antigravity":
             # 终端只在真实 Hook 对这条确切命令放行后执行同一 argv，不能重选参数或原件。
             decision = self.hook_decision(transcript, "run_command", {"CommandLine": shlex.join(command),
                                           "Cwd": str(self.project)}, with_reason=True)
-            self.assertEqual("deny" if denied else "allow", decision["decision"], (args[0], decision))
+            self.assertEqual("deny" if denied else "allow", decision["decision"], (command, decision))
             if denied:
                 return
         else:
@@ -613,6 +696,8 @@ class PackagedTaskPoolTest(unittest.TestCase):
                 (f"{source_pack} xy-playwright -- open http://localhost:1234", "deny"),
                 (f"{prefix} lib/delivery/qa_handoff_cli.py schema --output {target}", "deny"),
                 ("mkdir -p docs/plans", "allow"),
+                (f"git diff --binary --full-index --no-renames --no-ext-diff --no-textconv "
+                 f"HEAD -- src/fixture.txt > {scratch}/writer.diff", "allow"),
                 ("git diff --output=src/other.txt", "deny"), ("echo changed > src/fixture.txt", "deny"),
                 ("python3 -c 'print(1)'", "deny"), ("mkdir -p src/new", "deny"),
                 (f"{helper} task --input {target} --task-id api > {scratch}/export.json", "allow"),
@@ -710,7 +795,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
             f"{helper} task --input {target} --task-id api --output {linked}"}))
         self.assertEqual("deny", self.hook_decision(log, "run_command", {"CommandLine": f"{usage} --input {linked}"}))
 
-    def claim_agy_design(self):
+    def claim_agy_design(self, *, app=False):
         from tests.test_plugin_workflow_contract import visual_request
 
         host = "antigravity"
@@ -725,30 +810,45 @@ class PackagedTaskPoolTest(unittest.TestCase):
             page.write_text("<main></main>", encoding="utf-8")
         pack = {key: example[key] for key in ("schema_version", "standards_contract", "ui_contract")}
         pack.update(task=task, request_scope="prototype_only", approved_gates=["requirements_approved"])
-        path = self.workspace / "design-pack.json"
+        if app:
+            pm = self.agy_pm.split(":")[1]
+            start = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"}
+            log = self.agy_log(pm, start, app=True).with_name("transcript.jsonl")
+            scratch = Path(self.host_delivery(host, log, GRAPH, "scratch", "--root", self.project,
+                                             "--request-id", task["request_id"])["scratch_dir"])
+            path = scratch / "design-pack.json"
+            self.assertEqual("allow", self.hook_decision(log, "write_file", {"Path": str(path)}))
+        else:
+            path = self.workspace / "design-pack.json"
         path.write_text(json.dumps(pack), encoding="utf-8")
-        claim = self.pool(host, "claim", "--register", "--title", task["goal"], "--record", path,
-                          "--task-id", task["id"], "--request-id", task["request_id"],
-                          "--expect-sha256", digest(path), *CAPACITY)
-        parent_log, log = self.bind_agy(claim, task["role"], self.project)
+        arguments = ("--register", "--title", task["goal"], "--record", path,
+                     "--task-id", task["id"], "--request-id", task["request_id"],
+                     "--expect-sha256", digest(path), *CAPACITY)
+        claim = (self.host_delivery(host, log, POOL, "claim", "--root", self.project, "--pm-id", self.agy_pm, *arguments)
+                 if app else self.pool(host, "claim", *arguments))
+        app_receipt = path.parent / "claim.json" if app else None
+        parent_log, log = self.bind_agy(claim, task["role"], self.project, app_receipt=app_receipt)
         self.assertEqual(log.parents[2].name, task_in(path)["agent_ref"]["agent_id"])
         return path, parent_log, log
 
-    def bind_agy(self, claim, role, execution_root):
+    def bind_agy(self, claim, role, execution_root, *, app_receipt=None):
         marker = claim["dispatch_marker"]
         pm, child = self.agy_pm.split(":")[1], str(uuid4())
         log = self.agy_log(child, {"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
             "content": "\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender=" + pm
-                       + " priority=MESSAGE_PRIORITY_HIGH content=" + marker + "\n执行当前任务\n</SYSTEM_MESSAGE>"})
-        receipt = {"conversationId": child, "logAbsoluteUri": log.with_name("transcript.jsonl").as_uri(),
-                   "workspaceUris": [execution_root.as_uri()]}
-        parent_log = self.agy_log(pm, {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"},
-                     {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
-                      "tool_calls": [{"name": "invoke_subagent", "args": {"TypeName": role, "Prompt": marker}}]},
-                     {"step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
-                      "content": "Created the following subagent:\n" + json.dumps(receipt)
-                                 + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
-                                 + "There is no need to poll for its response."})
+                       + " priority=MESSAGE_PRIORITY_HIGH content=" + marker + "\n执行当前任务\n</SYSTEM_MESSAGE>"},
+                           app=app_receipt is not None)
+        parent_log = self.agy_parent_log(pm, log, marker, role, execution_root, app=app_receipt is not None,
+                                         with_steps=app_receipt is not None)
+        if app_receipt is not None:
+            parent_log = parent_log.with_name("transcript.jsonl")
+            self.assertEqual("allow", self.hook_decision(parent_log, "write_file", {"Path": str(app_receipt)}))
+            app_receipt.write_text(json.dumps(claim), encoding="utf-8")
+            bound = self.host_delivery("antigravity", parent_log, POOL, "bind", "--root", self.project,
+                                       "--pm-id", self.agy_pm, "--receipt", app_receipt,
+                                       "--host", "antigravity", "--agent-id", child)
+            self.assertEqual({"host": "antigravity", "agent_id": child}, bound["agent_ref"])
+            return parent_log, log.with_name("transcript.jsonl")
         receipt_path = self.workspace / (child + "-claim.json")
         receipt_path.write_text(json.dumps(claim), encoding="utf-8")
         plugin = self.plugins["antigravity"]
@@ -761,6 +861,82 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({"host": "antigravity", "agent_id": child}, json.loads(result.stdout)["agent_ref"])
         return parent_log, log
+
+    def agy_parent_log(self, pm, child_log, marker, role, execution_root, *, app=False, with_steps=False):
+        receipt = {"conversationId": child_log.parents[2].name,
+                   "logAbsoluteUri": child_log.with_name("transcript.jsonl").as_uri(),
+                   "workspaceUris": [execution_root.as_uri()]}
+        start = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"}
+        calls = [{"name": "invoke_subagent", "args": {"TypeName": role, "Prompt": marker}}]
+        request = {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "tool_calls": calls}
+        results = []
+        timestamps = ""
+        if with_steps:
+            calls.insert(0, {"name": "update_steps", "args": {"steps": [{"status": "in_progress", "title": "派发实现者"}]}})
+            timestamps = "Created At: 2026-11-23T10:57:46+08:00\nCompleted At: 2026-11-23T10:57:48+08:00\n" * 2
+            results.append({"step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                            "content": timestamps + "OK"})
+        results.append({"step_index": 2 + len(results), "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                        "content": timestamps + "Created the following subagent:\n" + json.dumps(receipt)
+                        + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
+                          "There is no need to poll for its response."})
+        short_calls = [{**call, "args": {key: json.dumps(value) for key, value in call["args"].items()}} for call in calls]
+        return self.agy_log(pm, start, request, *results, app=app,
+                            short_events=[start, {**request, "tool_calls": short_calls}, *results])
+
+    def test_antigravity_app_hook_and_first_bind_require_same_client_receipt(self):
+        host = "antigravity"
+        pm, child = self.agy_pm.split(":")[1], str(uuid4())
+        path = self.register(host, "changes", "修正", light=True, owned="src/fixture.txt")
+        claim = self.claim(host, self.locate(host, "修正"))
+        marker = claim["dispatch_marker"]
+        claimed = path.read_bytes()
+        child_start = {"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                       "content": f"\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender={pm} "
+                                  f"priority=MESSAGE_PRIORITY_HIGH content={marker}\n执行当前任务\n</SYSTEM_MESSAGE>"}
+        app_child = self.agy_log(child, child_start, app=True).with_name("transcript.jsonl")
+        cli_child = self.agy_log(child, child_start)
+
+        def dispatch(log, *, app=False):
+            return self.agy_parent_log(pm, log, marker, "xy-backend", self.project, app=app)
+
+        target = {"Path": "src/fixture.txt"}
+        cli_parent = dispatch(cli_child)
+        self.assertEqual("allow", self.hook_decision(cli_child, "edit_file", target))
+        result = self.hook_decision(app_child, "edit_file", target, with_reason=True)
+        self.assertEqual("deny", result["decision"])
+        self.assertIn("无法核对当前子会话的可写派发", result["reason"])
+
+        scratch = self.invoke(host, GRAPH, "scratch", "--root", self.project, "--request-id", "changes")
+        receipt = Path(scratch["scratch_dir"]) / "claim.json"
+        receipt.write_text(json.dumps(claim), encoding="utf-8")
+
+        def bind(log, code=0):
+            return self.host_delivery(host, log, POOL, "bind", "--root", self.project, "--pm-id", self.agy_pm,
+                                      "--receipt", receipt, "--host", host, "--agent-id", child, code=code)
+
+        dispatch(app_child)
+        self.assertIn("no matching native", bind(cli_parent, code=2)["error"])
+        self.assertEqual(claimed, path.read_bytes())
+
+        app_parent = dispatch(app_child, app=True).with_name("transcript.jsonl")
+        self.assertEqual("allow", self.hook_decision(app_child, "edit_file", target))
+        self.assertEqual("deny", self.hook_decision(cli_child, "edit_file", target))
+        self.assertIn("both App and CLI", bind(app_parent, code=2)["error"])
+        self.assertEqual(claimed, path.read_bytes())
+
+        shutil.rmtree(cli_parent.parents[3])
+        self.assertEqual("allow", self.hook_decision(app_parent, "run_command", {"CommandLine": "git status --short"}))
+        self.assertEqual("deny", self.hook_decision(app_parent, "edit_file", target))
+        explicit = "请 PM 本人直接修改 src/fixture.txt"
+        self.assertEqual("allow", self.hook_decision(app_parent, "edit_file", target, explicit))
+        self.assertEqual("deny", self.hook_decision(app_parent, "edit_file", {"Path": ".git/config"},
+                                                   "这次由主会话亲自改"))
+        self.assertEqual("allow", self.hook_decision(app_child, "edit_file", target))
+        self.assertEqual("deny", self.hook_decision(app_child, "edit_file", {"Path": "src/other.txt"}))
+        bound = bind(app_parent)
+        self.assertEqual({"host": host, "agent_id": child}, bound["agent_ref"])
+        self.assertEqual(bound["agent_ref"], task_in(path)["agent_ref"])
 
     def test_antigravity_design_child_can_query_one_topic_read_only(self):
         path, _, log = self.claim_agy_design()
@@ -821,7 +997,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.project = write_valid_project(self.workspace / "AGY design")
         plan, _ = bind_requirement_documents(self.project)
         (self.project / PROTOTYPE_RELATIVE / "index.html").unlink()
-        record, pm, child = self.claim_agy_design()
+        record, pm, child = self.claim_agy_design(app=True)
         task = task_in(record)
         relative, = task["owned_paths"]
         page = self.project / relative
@@ -837,14 +1013,76 @@ class PackagedTaskPoolTest(unittest.TestCase):
         review = (*selected, "--plan", plan.relative_to(self.project), "--request-id", task["request_id"])
         self.host_delivery(host, child, FEEDBACK, "prepare-delivery", *selected, denied=True)
         self.host_delivery(host, child, FEEDBACK, "open", *review, denied=True)
-        self.update(host, self.locate(host, task["goal"]), {"set": {"state": "BUILD_VERIFIED"}})
-        self.assertEqual("BUILD_VERIFIED", task_in(record)["state"])
+        original = record.read_bytes()
+        for tool, args in (
+                ("edit_file", {"Path": str(record)}),
+                ("write_file", {"Path": str(record)}),
+                ("multi_replace_file_content", {"TargetFile": str(record)}),
+                ("run_command", {"CommandLine": f"pwd > {shlex.quote(str(record))}"}),
+                ("run_command", {"CommandLine": f"touch {shlex.quote(str(record))}"})):
+            with self.subTest(tool=tool):
+                denied = self.hook_decision(pm, tool, args, with_reason=True)
+                self.assertEqual("deny", denied["decision"])
+                self.assertIn("已登记的任务原件", denied["reason"])
+                self.assertNotIn(str(record), denied["reason"])
+        self.assertEqual(original, record.read_bytes())
+        other_pm = self.agy_log(str(uuid4()), {"step_index": 0, "source": "USER_EXPLICIT",
+                                              "type": "USER_INPUT", "status": "DONE"}, app=True)
+        self.assertEqual("deny", self.hook_decision(other_pm, "edit_file", {"Path": str(record)}))
+        self.assertEqual("allow", self.hook_decision(other_pm, "write_file", {"Path": str(record.with_name("handoff.json"))}))
+        alias = record.with_name(record.name.upper())
+        if alias.exists() and alias.samefile(record):
+            self.assertEqual("deny", self.hook_decision(pm, "edit_file", {"Path": str(alias)}))
+        # 导出工件可覆盖原有的普通交接包，但其另一个输入不能借 --output 覆盖本原件。
+        export_source = record.with_name("another-source.json")
+        export_source.write_text(json.dumps(graph()), encoding="utf-8")
+        self.host_delivery(host, pm, GRAPH, "task", "--root", self.project, "--input", export_source,
+                           "--task-id", task_in(export_source)["id"], "--output", record,
+                           "--expect-sha256", digest(record), denied=True)
+        # 原件正文暂缺不等于解除登记。其余证据文件仍可在同一请求目录内写入。
+        record.unlink()
+        try:
+            self.assertEqual("deny", self.hook_decision(pm, "write_file", {"Path": str(record)}))
+            self.assertEqual("allow", self.hook_decision(pm, "write_file", {"Path": str(record.with_name("result.json"))}))
+            plugin = self.plugins[host]
+            init = (f"bash {plugin}/lib/python_runtime.sh -B -X utf8 {plugin}/plugins/source_pack.py "
+                    f"helper --project {self.project} plugins/project_context.py init "
+                    f"--adapter project.yaml --output {shlex.quote(str(record))}")
+            self.assertEqual("deny", self.hook_decision(pm, "run_command", {"CommandLine": init}))
+        finally:
+            record.write_bytes(original)
+
+        view = ("view", "--root", self.project, "--pm-id", self.agy_pm, "--query", task["request_id"])
+        row, = self.host_delivery(host, pm, POOL, *view)["tasks"]
+        accepted = f"原生设计实例静态通过 {relative}，exit 0，dependency_fingerprint={fingerprint}"
+        patch = record.with_name("writer-result.json")
+        self.assertEqual("allow", self.hook_decision(pm, "write_file", {"Path": str(patch)}))
+        patch.write_text(json.dumps({"tasks": {task["id"]: {
+            "set": {"state": "BUILD_VERIFIED"}, "append": {"acceptance_evidence": [accepted]},
+        }}}, ensure_ascii=False), encoding="utf-8")
+        updated = self.host_delivery(host, pm, GRAPH, "update", "--root", self.project, "--input", record,
+                                     "--patch", patch, "--expect-sha256", row["sha256"])
+        self.assertEqual([{**row, "sha256": updated["sha256"], "state": "BUILD_VERIFIED", "active": False}],
+                         self.host_delivery(host, pm, POOL, *view)["tasks"])
+        self.assertEqual([*task["acceptance_evidence"], accepted], task_in(record)["acceptance_evidence"])
         self.host_delivery(host, pm, FEEDBACK, "open", *review, denied=True)
         self.assertEqual(evidence, self.host_delivery(host, pm, PROTOTYPE, *static,
                          "--expect", f"{page.name}={fingerprint}"))
         with urlopen(page.as_uri()) as original:
             self.assertEqual(before, original.read())
         self.assertFalse((page.parent / ".xy-prototype-entry").exists())
+        cleanup = ("cleanup-scratch", "--root", self.project, "--request-id", task["request_id"])
+        preview = self.host_delivery(host, pm, GRAPH, *cleanup, "--dry-run")
+        result = self.host_delivery(host, pm, GRAPH, *cleanup, "--expect-sha256", preview["snapshot_sha256"], code=2)
+        self.assertIn("registered task original", result["error"])
+        self.assertEqual(updated["sha256"], digest(record))
+        keep = ("--keep", record.name)
+        preview = self.host_delivery(host, pm, GRAPH, *cleanup, *keep, "--dry-run")
+        result = self.host_delivery(host, pm, GRAPH, *cleanup, *keep,
+                                    "--expect-sha256", preview["snapshot_sha256"])
+        self.assertEqual("applied", result["status"])
+        self.assertFalse(patch.exists())
+        self.assertEqual(updated["sha256"], digest(record))
 
     def test_codex_and_claude_packaged_prototype_delivery_serves_the_page_and_stops(self):
         from tests.test_prototype_workspace import PROTOTYPE_RELATIVE, bind_requirement_documents, write_valid_project

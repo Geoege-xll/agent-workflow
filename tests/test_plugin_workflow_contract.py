@@ -12,6 +12,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from uuid import uuid4
 
 from lib import task_graph_records as records
 from lib.delivery import worktree_cli as delivery
@@ -583,6 +584,63 @@ class PluginWorkflowContractTest(unittest.TestCase):
                 self.assertEqual(str(source), result["path"])
                 self.assertEqual("def accept():\n", result["text"])
                 self.assertTrue(result["eof"])
+
+    def test_packaged_agy_pool_claim_requires_current_frozen_ordinary_full_scope(self):
+        project = self.root / "agy-qa-claim"
+        project.mkdir()
+        with working_root(project):
+            current = qa_graph(project)
+            current["tasks"][2].pop("foundation_task_id")
+            current["tasks"][1]["state"] = "BUILD_VERIFIED"
+            original = self.root / "agy-qa-graph.json"
+            original.write_text(json.dumps(current))
+            pm = f"antigravity:{uuid4()}"
+            plugin = self.installed["antigravity"]
+            qa = current["tasks"][2]
+
+            def claim():
+                return subprocess.run(
+                    [sys.executable, "-B", str(plugin / "plugins/source_pack.py"), "helper",
+                     "--project", str(project), "lib/task_pool_cli.py", "claim", "--register",
+                     "--root", str(project), "--pm-id", pm, "--record", str(original),
+                     "--expect-sha256", records.digest(original.read_bytes()), "--request-id", qa["request_id"],
+                     "--task-id", qa["id"], "--configured-subagents", "2", "--configured-writers", "1",
+                     "--host-available-subagents", "2"],
+                    cwd=project, env=isolated_environment(self.root / "home"), capture_output=True, text=True,
+                    timeout=15,
+                )
+
+            before = original.read_bytes()
+            rejected = claim()
+            self.assertEqual(2, rejected.returncode)
+            self.assertIn("requires a PM-frozen qa_scope_ref", rejected.stderr)
+            self.assertEqual(before, original.read_bytes())
+
+            feature = project / "src/feature.py"
+            delivery.git(project, "init", "-b", "main")
+            delivery.git(project, "add", ".")
+            delivery.git(project, "-c", "user.name=Scope Fixture", "-c", "user.email=scope@example.invalid",
+                         "commit", "-m", "fixture baseline")
+            base = delivery.head(project)
+            feature.write_bytes(b"feature-v2")
+            patch = delivery.diff_bytes(project, base)
+            frozen = {"repositories": [{"path": ".", "base_revision": base, "head_revision": base,
+                                         "diff_fingerprint": records.digest(patch),
+                                         "changed_paths": ["src/feature.py"]}]}
+            freeze = json.dumps({"tasks": {qa["id"]: {"freeze_qa_scope": frozen}}})
+            result = self.helper("antigravity", project, "update", "--root", project, "--input", original,
+                                 "--expect-sha256", records.digest(before), "--patch", "-", input=freeze)
+            self.assertEqual(0, result.returncode, result.stderr)
+            feature.write_bytes(b"feature-v3")
+            rejected = claim()
+            self.assertEqual(2, rejected.returncode)
+            self.assertIn("PM-frozen QA scope is stale", rejected.stderr)
+            self.assertEqual("DECLARED", json.loads(original.read_bytes())["tasks"][2]["state"])
+            feature.write_bytes(b"feature-v2")
+            accepted = claim()
+            self.assertEqual(0, accepted.returncode, accepted.stderr)
+            self.assertEqual("claimed", json.loads(accepted.stdout)["status"])
+            self.assertEqual("RUNNING", json.loads(original.read_bytes())["tasks"][2]["state"])
 
     def test_packaged_qa_compare_target_reads_the_original_frozen_scope(self):
         """三端从实际规则找到同一命令，在临时 Git 仓库区分请求差异与同文件的其它变更。"""

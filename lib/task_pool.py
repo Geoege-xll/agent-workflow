@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unicodedata
 
@@ -47,6 +48,54 @@ def _private(fd: int) -> None:
 
 
 @contextmanager
+def _pool_directory(base: Path, *, create: bool):
+    with ExitStack() as stack:
+        parent = stack.enter_context(records._scratch_base_directory(base, create=create))
+        _private(parent)
+        container = stack.enter_context(records._scratch_directory(base.parent))
+        _private(container)
+        pools = stack.enter_context(records._scratch_directory("task-pools", parent=parent, create=create))
+        _private(pools)
+        yield pools
+
+
+def _index_scope(root: Path, key: str) -> dict:
+    return {"schema_version": 1, "project": str(root), "project_node": _node(root), "pm": key}
+
+
+def _read_index(file: Path, scope: dict) -> dict | None:
+    body = read_file(file)
+    if body is None:
+        return None
+    info = file.lstat()
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise TaskGraphError("task pool index must be private")
+    data = records.decode(body)
+    dispatch._object(data, set(scope) | {"records"}, "task pool index")
+    if (type(data["schema_version"]) is not int or any(data[k] != v for k, v in scope.items())
+            or not isinstance(data["records"], dict) or len(data["records"]) > MAX_RECORDS):
+        raise TaskGraphError("task pool scope, project identity or index format changed")
+    for path, entry in data["records"].items():
+        if not Path(path).is_absolute() or str(Path(path)) != path or ".." in Path(path).parts:
+            raise TaskGraphError("invalid task pool record locator")
+        fields = {"parent_node", "kind", "request", "members", "title"}
+        if isinstance(entry, dict) and "prototype_claim" in entry:
+            fields.add("prototype_claim")
+            dispatch._sha(entry["prototype_claim"])
+        dispatch._object(entry, fields, "registered record")
+        if not isinstance(entry["members"], dict) or not entry["members"]:
+            raise TaskGraphError("invalid task pool member bindings")
+        for member in entry["members"].values():
+            dispatch._object(member, {"request", "role", "alias", "module", "type", "level", "root", "node"},
+                             "registered task identity")
+            if not isinstance(member["request"], str):
+                raise TaskGraphError("invalid task pool request identity")
+        if entry["title"] is not None:
+            _text(entry["title"], "title", 120)
+    return data
+
+
+@contextmanager
 def _index(root: Path, pm_id: str, *, create: bool):
     """按项目物理路径和显式 PM 身份定位，不从目录枚举会话或读取任何宿主历史。
 
@@ -60,16 +109,11 @@ def _index(root: Path, pm_id: str, *, create: bool):
     key = records.digest(pm_id.encode("utf-8"))
     base = project_scratch_base(root)
     file = base / "task-pools" / key / "index.json"
-    scope = {"schema_version": 1, "project": str(root), "project_node": _node(root), "pm": key}
+    scope = _index_scope(root, key)
     with ExitStack() as stack:
         # 新项目的首次只读查询不能创建 scratch；仅在明确 register 时分配目录。
         try:
-            parent = stack.enter_context(records._scratch_base_directory(base, create=create))
-            _private(parent)
-            container = stack.enter_context(records._scratch_directory(base.parent))
-            _private(container)
-            pools = stack.enter_context(records._scratch_directory("task-pools", parent=parent, create=create))
-            _private(pools)
+            pools = stack.enter_context(_pool_directory(base, create=create))
             new_slot = False
             if create:
                 try:
@@ -87,42 +131,77 @@ def _index(root: Path, pm_id: str, *, create: bool):
         # 新建槽的进程负责写入初始索引。若此刻另一进程只读探测，等待其短锁释放，
         # 避免登记因一次竞争退出并留下永久无索引的新槽；普通操作仍按既有忙错误返回。
         stack.enter_context(directory_lock(file.parent, "pm-task-pool", blocking=new_slot))
-        body = read_file(file)
-        if body is None:
+        data = _read_index(file, scope)
+        if data is None:
             # 首次登记前可以是空池。已有 PM 槽突然丢失索引则无法证明旧占用已结束，
             # 拒绝悄悄建空表后只登记一个目标。完整 scratch 被系统回收仍需 PM 重新盘点。
             if not new_slot:
                 raise TaskGraphError("missing task pool index in existing PM slot; restore the registered inventory")
             data = {**scope, "records": {}}
             _save(file, data)
-            yield file, data
-            return
-        info = file.lstat()
-        if info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise TaskGraphError("task pool index must be private")
-        data = records.decode(body)
-        dispatch._object(data, set(scope) | {"records"}, "task pool index")
-        if (type(data["schema_version"]) is not int or any(data[k] != v for k, v in scope.items())
-                or not isinstance(data["records"], dict) or len(data["records"]) > MAX_RECORDS):
-            raise TaskGraphError("task pool scope, project identity or index format changed")
-        for path, entry in data["records"].items():
-            if not Path(path).is_absolute() or str(Path(path)) != path or ".." in Path(path).parts:
-                raise TaskGraphError("invalid task pool record locator")
-            fields = {"parent_node", "kind", "request", "members", "title"}
-            if isinstance(entry, dict) and "prototype_claim" in entry:
-                fields.add("prototype_claim")
-                dispatch._sha(entry["prototype_claim"])
-            dispatch._object(entry, fields, "registered record")
-            if not isinstance(entry["members"], dict) or not entry["members"]:
-                raise TaskGraphError("invalid task pool member bindings")
-            for member in entry["members"].values():
-                dispatch._object(member, {"request", "role", "alias", "module", "type", "level", "root", "node"},
-                                 "registered task identity")
-                if not isinstance(member["request"], str):
-                    raise TaskGraphError("invalid task pool request identity")
-            if entry["title"] is not None:
-                _text(entry["title"], "title", 120)
         yield file, data
+
+
+def registered_record_paths(root: Path) -> frozenset[Path]:
+    """只为路径保护读取同一项目现有的原件定位，包括其它 PM 的登记。"""
+    root = dispatch._project_directory(str(root))
+    base = project_scratch_base(root)
+    found = set()
+    with ExitStack() as stack:
+        try:
+            pools = stack.enter_context(_pool_directory(base, create=False))
+        except FileNotFoundError:
+            return frozenset()
+        # 索引采用原子替换。这里只读取已有定位，不核对原件状态、不新建池，
+        # 也不持有另一个 PM 的锁去等待文件工具。损坏或缺失的既有索引必须拒绝。
+        for key in os.listdir(pools):
+            if not re.fullmatch(r"[0-9a-f]{64}", key):
+                raise TaskGraphError("invalid task pool slot")
+            with records._scratch_directory(key, parent=pools) as slot:
+                _private(slot)
+                data = _read_index(base / "task-pools" / key / "index.json", _index_scope(root, key))
+                if data is None:
+                    raise TaskGraphError("missing task pool index in existing PM slot; restore the registered inventory")
+                found.update(Path(path) for path in data["records"])
+    return frozenset(found)
+
+
+def require_registered_scratch_keeps(root: Path, target: Path, keep: tuple[str, ...]) -> None:
+    """保留清理范围内仍登记的原件，完成归档后由原来的清理规则决定。"""
+    try:
+        scope = target.stat()
+    except FileNotFoundError:
+        return
+    depth = len(target.parts)
+    kept = {target / relative for relative in keep}
+    for original in registered_record_paths(root):
+        if len(original.parts) <= depth:
+            continue
+        parent = Path(*original.parts[:depth])
+        if parent != target:
+            try:
+                if not os.path.samestat(scope, parent.stat()):
+                    continue
+            except FileNotFoundError:
+                continue
+        if target / original.relative_to(parent) in kept:
+            continue
+        try:
+            info = original.stat()
+        except FileNotFoundError:
+            # 缺失原件也仍然依赖已登记的父目录身份，由原 PM 先恢复。
+            info = None
+        if info is not None and info.st_nlink == 1:
+            for preserved in kept:
+                try:
+                    if os.path.samestat(info, preserved.stat()):
+                        break
+                except FileNotFoundError:
+                    continue
+            else:
+                raise TaskGraphError("scratch cleanup requires --keep for every registered task original in this request")
+        else:
+            raise TaskGraphError("scratch cleanup requires --keep for every registered task original in this request")
 
 
 def _save(file: Path, data: dict) -> None:

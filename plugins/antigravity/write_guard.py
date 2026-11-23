@@ -25,6 +25,8 @@ DENY_CHILD = ("xy-workflow 无法核对当前子会话的可写派发。QA 只�
               "实现任务请核对 claim、初始 Prompt 中的独立标记、原生创建回执和任务绑定。")
 DENY_OWNERSHIP = ("xy-workflow 已核对实现派发，目标超出当前 Writer 的 owned_paths、"
                   "固定工作区或可写资源范围。")
+DENY_REGISTERED_RECORD = ("xy-workflow 已登记的任务原件只能通过正式任务池或 task_graph_cli.py update "
+                          "回写。请用 pool view 取得当前记录与 SHA，并在请求目录另存补丁。")
 AGENT_DIRS = {".git", ".agents", ".agent", ".antigravity", ".awf", ".gemini", ".codex", ".claude"}
 EDIT_TOOLS = {"edit_file": "Path", "write_file": "Path", "write_to_file": "TargetFile",
               "replace_file_content": "TargetFile", "multi_replace_file_content": "TargetFile"}
@@ -69,7 +71,7 @@ def project_candidates(workspace):
             yield slot.parent.parent.parent
 
 
-def dispatched(snapshot, project, parent, child, marker=None):
+def dispatched(snapshot, project, parent, child, marker, brain):
     task = snapshot.task
     claim = task.get("antigravity_claim", {})
     reference = task.get("agent_ref")
@@ -78,14 +80,14 @@ def dispatched(snapshot, project, parent, child, marker=None):
         return False
     target = {"record": snapshot.record, "request_id": task["request_id"], "task_id": task["id"]}
     actual = native.dispatch_marker(project, target, task["claim_basis_sha256"], claim)
-    if marker is not None and marker != actual:
+    if marker != actual:
         return False
     # 绑定前后均认原生创建回执。任务 JSON 中的角色、实例 ID 或登记状态不能单独证明派发。
-    native.verify_creation(parent, child, snapshot.execution_root, actual, task["role"])
+    native.verify_creation(parent, child, snapshot.execution_root, actual, task["role"], brain=brain)
     return True
 
 
-def child_task(roots, current, parent, marker):
+def child_task(roots, current, parent, marker, brain):
     if not marker:
         return None
     for workspace in roots:
@@ -99,7 +101,7 @@ def child_task(roots, current, parent, marker):
                         or snapshot.execution_root != workspace):
                     continue
                 try:
-                    if dispatched(snapshot, project, parent, current, marker):
+                    if dispatched(snapshot, project, parent, current, marker, brain):
                         return workspace, task
                 except TaskGraphError as exc:
                     raise GuardRefusal(DENY_CHILD) from exc
@@ -180,7 +182,7 @@ class Access:
         if not all(p.is_dir() for p in self.roots):
             raise ValueError("缺少项目根")
         self.handoff = handoff
-        self.current, self.parent, self.marker = native.session_origin(event)
+        self.current, self.parent, self.marker, self.brain = native.session_origin(event)
         self.message = event.get("lastUserInput")
         self.transcript = Path(event["transcriptPath"])
         # 原生适配器已核对当前会话和日志的绝对路径，Artifact 同属这个会话目录。
@@ -194,7 +196,35 @@ class Access:
     def task(self):
         # 读取与核验不依赖绑定时序。只有要写入或执行任务登记的命令时，才进池
         # 核对角色、回执与所有权；QA 的正常只读取证不受忙锁或创建回执延迟影响。
-        return child_task(self.roots, self.current, self.parent, self.marker) if self.parent else None
+        return child_task(self.roots, self.current, self.parent, self.marker, self.brain) if self.parent else None
+
+    @cached_property
+    def registered_records(self):
+        return {
+            record for workspace in self.roots for project in project_candidates(workspace)
+            for record in task_pool.registered_record_paths(project)
+        }
+
+    def allows_unregistered_write(self, path):
+        # 原件登记以定位表为准。原件丢失时仍保护原路径，不能写一个临时副本接管；
+        # 同一物理文件可能因 macOS 卷上的大小写或 Unicode 别名拥有不同路径拼法。
+        registered = self.registered_records
+        if path not in registered:
+            try:
+                target = path.stat()
+            except FileNotFoundError:
+                return True
+            for record in registered:
+                try:
+                    info = record.stat()
+                except FileNotFoundError:
+                    continue
+                if os.path.samestat(info, target):
+                    break
+            else:
+                return True
+        self.refusal = DENY_REGISTERED_RECORD
+        return False
 
     def scratch_file(self, path, project=None):
         path = physical(str(path), Path("/"))
@@ -258,12 +288,13 @@ class Access:
             if not path.is_relative_to(root) or managed_path(path.relative_to(root)):
                 return False
             return (not path.is_relative_to(PLUGIN)
-                    and any(path.is_relative_to(root / owned) for owned in task["owned_paths"]))
+                    and any(path.is_relative_to(root / owned) for owned in task["owned_paths"])
+                    and self.allows_unregistered_write(path))
         if self.scratch_file(path):
-            return True
+            return self.allows_unregistered_write(path)
         # 宿主自带计划/交接 Artifact 的正文可写；同目录下的原生会话日志不是交付物。
         if path.parent == self.artifacts and path.name in {"task.md", "implementation_plan.md", "walkthrough.md"}:
-            return True
+            return self.allows_unregistered_write(path)
         self.refusal = DENY_PATH
         for root in self.roots:
             if not path.is_relative_to(root):
@@ -273,20 +304,20 @@ class Access:
                 continue
             self.refusal = DENY_PM
             if explicit_scope(self.message, root, path, single_root=len(self.roots) == 1):
-                return True
+                return self.allows_unregistered_write(path)
             if path.suffix != ".md" or any(part.startswith(".") for part in relative.parts):
                 continue
             adapters = [name for name in ("project.yaml", ".awf/project.yaml") if (root / name).is_file()]
             if len(adapters) == 1:
                 _, docs = project_docs_layout(root, Path(adapters[0]))
                 if projection_kind(relative.as_posix(), docs):
-                    return True
+                    return self.allows_unregistered_write(path)
         return False
 
     def can_make_directory(self, raw, cwd):
         if self.can_write(raw, cwd):
             return True
-        if self.parent or not cwd and not Path(raw).is_absolute():
+        if self.refusal == DENY_REGISTERED_RECORD or self.parent or not cwd and not Path(raw).is_absolute():
             return False
         path = physical(raw, cwd or Path("/"))
         for root in self.roots:
@@ -299,7 +330,7 @@ class Access:
                 plans = root / docs["plans"]
                 if (path in {plans, root / docs["standards_root"], (root / docs["project"]).parent}
                         or path in plans.parents or path.is_relative_to(plans)):
-                    return True
+                    return self.allows_unregistered_write(path)
         return False
 
     def verification(self, argv, cwd):

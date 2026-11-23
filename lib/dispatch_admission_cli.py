@@ -488,6 +488,7 @@ def admission(command: str, manifest: dict, target: dict | None = None,
                 raise TaskGraphError("standalone prototype claim requires the registered PM task pool")
             if target not in projection["candidates"]:
                 raise TaskGraphError("target is not an admitted spawn candidate")
+            policy.check_claim_target(root, sources[view.path], task)
             # 旧 Light/Full 的首个共享领取会原子登记当前事项的显式成员。发布仍只改目标，
             # 登记之后，旧 update/task 也会看见相同成员，即使它们没有收到 manifest。
             shared_solution_records.bind(views, selected=shared_solution_records.decision_keys(task))

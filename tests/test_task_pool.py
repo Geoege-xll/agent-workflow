@@ -330,11 +330,11 @@ class TaskPoolTest(unittest.TestCase):
         self.assertEqual(unbound_sha, self.sha(exported))
         # 只在本测试进程替换系统日志定位。生产 CLI 无可指定日志路径或验证结果的选项；
         # 登记、两次领取、释放、原件发布和 CAS 都经过与正常入口相同的实际逻辑。
-        brain = self.work / "native"
+        brain = self.work / "cli-brain"
         relative = Path(".system_generated/logs/transcript.jsonl")
         log = brain / parent / relative
         log.parent.mkdir(parents=True)
-        self.enterContext(mock.patch.object(antigravity_dispatch, "_brain", return_value=brain))
+        self.enterContext(mock.patch.object(antigravity_dispatch, "_brain_roots", return_value=(self.work / "app-brain", brain)))
         self.enterContext(mock.patch.object(tempfile, "tempdir", str(self.work)))
 
         def bind(ident=child, receipt=current):
@@ -451,6 +451,129 @@ class TaskPoolTest(unittest.TestCase):
         self.assertEqual(result["agent_ref"], json.loads(exported.read_bytes())["task"]["agent_ref"])
         log.unlink()
         self.assertEqual(result, bind())
+
+    def test_antigravity_app_display_update_acks_must_precede_the_creation_receipt(self):
+        parent, child = (str(uuid4()) for _ in range(2))
+        app, cli = self.work / "app-brain", self.work / "cli-brain"
+        self.enterContext(mock.patch.object(antigravity_dispatch, "_brain_roots", return_value=(app, cli)))
+        relative = Path(".system_generated/logs/transcript.jsonl")
+        log = app / parent / relative
+        full = log.with_name("transcript_full.jsonl")
+        marker = "XY-WORKFLOW-CLAIM " + "1" * 64
+        steps = {"name": "update_steps", "args": {"steps": [{"status": "in_progress", "title": "派发原型设计师"}]}}
+        focus = {"name": "update_focus", "args": {"focus": "派发原型设计师"}}
+        create = {"name": "invoke_subagent", "args": {"Prompt": marker, "TypeName": "xy-uiux"}}
+        native = {"source": "MODEL", "status": "DONE"}
+        request = {**native, "step_index": 84, "type": "PLANNER_RESPONSE", "tool_calls": [steps, create]}
+        timestamps = "Created At: 2026-11-23T10:57:46+08:00\nCompleted At: 2026-11-23T10:57:48+08:00\n" * 2
+        ack = {**native, "step_index": 85, "type": "GENERIC", "content": timestamps + "OK"}
+        payload = {"conversationId": child, "logAbsoluteUri": (app / child / relative).as_uri(),
+                   "workspaceUris": [self.root.as_uri()]}
+        receipt = {**ack, "step_index": 86, "content": timestamps + "Created the following subagent:\n" + json.dumps(payload)
+                   + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
+                     "There is no need to poll for its response."}
+        batch = {**request, "tool_calls": [steps, focus, create]}
+        focus_ack = {**ack, "step_index": 86}
+        batch_receipt = {**receipt, "step_index": 87}
+
+        def write(target, *events):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+
+        def verify():
+            antigravity_dispatch.verify_creation(parent, child, self.root, marker, "xy-uiux")
+
+        def short_request(event):
+            return {**event, "tool_calls": [
+                {**call, "args": {key: json.dumps(value) for key, value in call["args"].items()}}
+                for call in event["tool_calls"]
+            ]}
+
+        short = short_request(request)
+        write(log, short, ack, receipt)
+        verify()
+        write(log, short_request(batch), ack, focus_ack, batch_receipt)
+        verify()
+        write(full, request, ack, receipt)
+        verify()
+        # 实际 App 原型派发批次有两次界面更新，各自确认后才消费子会话回执。
+        write(full, batch, ack, focus_ack, batch_receipt)
+        verify()
+        for label, calls in {
+                "different sibling tool": [{**steps, "name": "update_focus"}, create],
+                "creation first": [create, steps],
+                "multiple creations": [steps, create, create],
+                "missing step field": [{**steps, "args": {"steps": [{"status": "done"}]}}, create],
+                "wrong full encoding": short["tool_calls"],
+        }.items():
+            with self.subTest(case=label):
+                write(full, {**request, "tool_calls": calls}, ack, receipt)
+                with self.assertRaisesRegex(ValueError, "no matching native"):
+                    verify()
+        for label, calls in {
+                "different focus tool": [steps, {**focus, "name": "run_command"}, create],
+                "focus has extra args": [steps, {**focus, "args": {**focus["args"], "path": "src/one"}}, create],
+                "reversed updates": [focus, steps, create],
+                "repeated focus": [steps, focus, focus, create],
+                "focus batch has multiple creations": [steps, focus, create, create],
+                "wrong encoding for batch": short_request(batch)["tool_calls"],
+        }.items():
+            with self.subTest(case=label):
+                write(full, {**batch, "tool_calls": calls}, ack, focus_ack, batch_receipt)
+                with self.assertRaisesRegex(ValueError, "no matching native"):
+                    verify()
+        for invalid_focus in (None, 1, " ", "有效\n非法", "x" * 513):
+            with self.subTest(invalid_focus=invalid_focus):
+                bad_focus = {**focus, "args": {"focus": invalid_focus}}
+                write(full, {**batch, "tool_calls": [steps, bad_focus, create]}, ack, focus_ack, batch_receipt)
+                with self.assertRaisesRegex(ValueError, "no matching native"):
+                    verify()
+        write(full, {**request, "tool_calls": [focus, create]}, ack, receipt)
+        with self.assertRaisesRegex(ValueError, "no matching native"):
+            verify()
+        for label, events in {
+                "omitted focus acknowledgement": [batch, ack, receipt],
+                "failed focus acknowledgement": [batch, ack, {**focus_ack, "status": "ERROR"}, batch_receipt],
+                "foreign focus acknowledgement": [batch, ack, {**focus_ack, "source": "SYSTEM"}, batch_receipt],
+                "truncated focus acknowledgement": [batch, ack, {**focus_ack, "truncated_fields": ["content"]}, batch_receipt],
+                "unexpected call before second acknowledgement": [batch, ack, {**batch, "step_index": 86,
+                                                               "tool_calls": [{"name": "run_command", "args": {}}]},
+                                                               {**focus_ack, "step_index": 87},
+                                                               {**batch_receipt, "step_index": 88}],
+        }.items():
+            with self.subTest(case=label):
+                write(full, *events)
+                with self.assertRaisesRegex(ValueError, "no matching native"):
+                    verify()
+        for label, events in {
+                "truncated request": [{**request, "truncated_fields": ["tool_calls.0.args.steps"]}, ack, receipt],
+                "omitted acknowledgement": [request, {**receipt, "step_index": 85}],
+                "reversed results": [request, {**receipt, "step_index": 85}, {**ack, "step_index": 86}],
+                "unwrapped acknowledgement": [request, {**ack, "content": "OK"}, receipt],
+                "failed acknowledgement": [request, {**ack, "status": "ERROR"}, receipt],
+                "chat acknowledgement": [request, {**ack, "type": "PLANNER_RESPONSE"}, receipt],
+                "foreign acknowledgement": [request, {**ack, "source": "USER_EXPLICIT"}, receipt],
+                "truncated acknowledgement": [request, {**ack, "truncated_fields": ["content"]}, receipt],
+                "interleaved action": [request, ack, {**ack, "step_index": 86}, {**receipt, "step_index": 87}],
+                "receipt index gap": [request, ack, {**receipt, "step_index": 87}],
+        }.items():
+            with self.subTest(case=label):
+                write(full, *events)
+                with self.assertRaisesRegex(ValueError, "no matching native"):
+                    verify()
+        full.unlink()
+        write(log, request, ack, receipt)
+        with self.assertRaisesRegex(ValueError, "no matching native"):
+            verify()
+        log.unlink()
+        cli_batch_receipt = {**batch_receipt, "content": batch_receipt["content"].replace(str(app), str(cli))}
+        write(cli / parent / full.relative_to(app / parent), batch, ack, focus_ack, cli_batch_receipt)
+        with self.assertRaisesRegex(ValueError, "no matching native"):
+            verify()
+        cli_receipt = {**receipt, "content": receipt["content"].replace(str(app), str(cli))}
+        write(cli / parent / full.relative_to(app / parent), request, ack, cli_receipt)
+        with self.assertRaisesRegex(ValueError, "no matching native"):
+            verify()
 
     def test_antigravity_only_pool_can_release_or_confirm_uncreated(self):
         self.pm = "antigravity:" + str(uuid4())

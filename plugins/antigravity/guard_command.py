@@ -23,7 +23,7 @@ READ_FLAGS = {
 GIT_FLAGS = {
     "status": {"--short", "--porcelain", "--porcelain=v1", "--porcelain=v2", "--branch", "-s", "-b"},
     "diff": {"--stat", "--name-only", "--name-status", "--cached", "--staged", "--check", "--no-ext-diff",
-             "--no-textconv", "--no-color", "--", "-U0"},
+             "--no-textconv", "--no-color", "--binary", "--full-index", "--no-renames", "--", "-U0"},
     "log": {"--oneline", "--decorate", "--no-color", "-n", "--stat"},
     "ls-files": {"--stage", "--cached", "--others", "--exclude-standard", "-z"},
     "rev-parse": {"--show-toplevel", "--show-prefix", "--abbrev-ref", "--verify"},
@@ -287,8 +287,12 @@ def packaged_helper(words, access, plugin, cwd, *, redirected=False):
         if access.parent:
             return False
         values = options(rest, {"--adapter", "--input", "--output"})
-        return (action == "apply" and values == {"--adapter": ".awf/project.yaml"}
-                or action == "init" and access.scratch_file(project / values["--output"]))
+        if action == "apply":
+            return values == {"--adapter": ".awf/project.yaml"}
+        if action != "init" or "--output" not in values:
+            return False
+        output = project / values["--output"]
+        return access.scratch_file(output) and access.can_write(str(output), project)
     if helper == "lib/task_pool_cli.py" and action in POOL_COMMANDS:
         values = options(rest, POOL_FLAGS)
         return (access.project_root(values.get("--root"), expected=project) and not access.parent
@@ -299,8 +303,10 @@ def packaged_helper(words, access, plugin, cwd, *, redirected=False):
         access.project_root(values.get("--root"), expected=project)
         if "--pm-id" in values and (access.parent or values["--pm-id"] != "antigravity:" + access.current):
             return False
-        if "--output" in values and (access.parent or not access.scratch_file(project / values["--output"])):
-            return False
+        if "--output" in values:
+            output = project / values["--output"]
+            if access.parent or not access.scratch_file(output) or not access.can_write(str(output), project):
+                return False
         if action in GRAPH_READ:
             return True
         if access.parent:
