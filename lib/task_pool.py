@@ -95,6 +95,21 @@ def _read_index(file: Path, scope: dict) -> dict | None:
     return data
 
 
+def _initialize_index(file: Path, pools: int, scope: dict) -> bool:
+    # 在扫描范围外写好空索引，再一次发布整个 PM 槽。初始化锁只协调新槽，
+    # 既有槽的锁和原件发布顺序保持不变。
+    pool_dir = file.parent.parent
+    with directory_lock(pool_dir, "pm-task-pool-init", blocking=True):
+        try:
+            os.stat(file.parent.name, dir_fd=pools, follow_symlinks=False)
+        except FileNotFoundError:
+            with tempfile.TemporaryDirectory(prefix=".pool-init-", dir=pool_dir.parent) as staged:
+                _save(Path(staged) / file.name, {**scope, "records": {}})
+                os.rename(staged, file.parent.name, dst_dir_fd=pools)
+            return True
+    return False
+
+
 @contextmanager
 def _index(root: Path, pm_id: str, *, create: bool):
     """按项目物理路径和显式 PM 身份定位，不从目录枚举会话或读取任何宿主历史。
@@ -114,13 +129,7 @@ def _index(root: Path, pm_id: str, *, create: bool):
         # 新项目的首次只读查询不能创建 scratch；仅在明确 register 时分配目录。
         try:
             pools = stack.enter_context(_pool_directory(base, create=create))
-            new_slot = False
-            if create:
-                try:
-                    os.mkdir(key, 0o700, dir_fd=pools)
-                    new_slot = True
-                except FileExistsError:
-                    pass
+            new_slot = create and _initialize_index(file, pools, scope)
             slot = stack.enter_context(records._scratch_directory(key, parent=pools))
             _private(slot)
         except FileNotFoundError:
@@ -128,17 +137,11 @@ def _index(root: Path, pm_id: str, *, create: bool):
                 raise
             yield file, {**scope, "records": {}}
             return
-        # 新建槽的进程负责写入初始索引。若此刻另一进程只读探测，等待其短锁释放，
-        # 避免登记因一次竞争退出并留下永久无索引的新槽；普通操作仍按既有忙错误返回。
+        # 首次登记等待并发读取释放短锁；已有槽的操作仍按既有忙错误返回。
         stack.enter_context(directory_lock(file.parent, "pm-task-pool", blocking=new_slot))
         data = _read_index(file, scope)
         if data is None:
-            # 首次登记前可以是空池。已有 PM 槽突然丢失索引则无法证明旧占用已结束，
-            # 拒绝悄悄建空表后只登记一个目标。完整 scratch 被系统回收仍需 PM 重新盘点。
-            if not new_slot:
-                raise TaskGraphError("missing task pool index in existing PM slot; restore the registered inventory")
-            data = {**scope, "records": {}}
-            _save(file, data)
+            raise TaskGraphError("missing task pool index in existing PM slot; restore the registered inventory")
         yield file, data
 
 

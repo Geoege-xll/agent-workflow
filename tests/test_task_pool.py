@@ -190,6 +190,25 @@ class TaskPoolTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "missing task pool index"):
                 task_pool.registered_tasks(self.root, self.pm)
 
+    def test_new_pm_index_is_visible_only_after_initial_publication(self):
+        with mock.patch.object(tempfile, "tempdir", str(self.work)):
+            existing = self.record("existing")
+            pending = self.record("pending")
+            self.reg(existing)
+            other_pm = "antigravity:another-conversation"
+
+            def fail_during_initial_save(file, data):
+                self.assertEqual(frozenset({existing}), task_pool.registered_record_paths(self.root))
+                raise OSError("interrupted initial save")
+
+            with mock.patch.object(task_pool, "_save", side_effect=fail_during_initial_save):
+                with self.assertRaisesRegex(OSError, "interrupted initial save"):
+                    task_pool.register(self.root, other_pm, str(pending), self.sha(pending), None)
+
+            self.assertEqual(frozenset({existing}), task_pool.registered_record_paths(self.root))
+            task_pool.register(self.root, other_pm, str(pending), self.sha(pending), None)
+            self.assertEqual(frozenset({existing, pending}), task_pool.registered_record_paths(self.root))
+
     def test_child_expansion_requires_its_reviewed_version_and_preserves_previous_identity(self):
         path = self.record("parent", level="Full")
         self.reg(path)
