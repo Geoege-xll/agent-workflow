@@ -25,6 +25,8 @@ DENY_CHILD = ("xy-workflow 无法核对当前子会话的可写派发。QA 只�
               "实现任务请核对 claim、初始 Prompt 中的独立标记、原生创建回执和任务绑定。")
 DENY_OWNERSHIP = ("xy-workflow 已核对实现派发，目标超出当前 Writer 的 owned_paths、"
                   "固定工作区或可写资源范围。")
+DENY_MISSING_POOL_INDEX = ("xy-workflow 找到缺少 index.json 的既有 PM 任务池槽。请恢复原登记索引后再写入；"
+                           "已登记的 Writer 验证结果可由其 PM 使用正式 complete-writer 回写。")
 DENY_REGISTERED_RECORD = ("xy-workflow 已登记的任务原件只能通过正式任务池或 task_graph_cli.py update "
                           "回写。请用 pool view 取得当前记录与 SHA，并在请求目录另存补丁。")
 AGENT_DIRS = {".git", ".agents", ".agent", ".antigravity", ".awf", ".gemini", ".codex", ".claude"}
@@ -83,7 +85,11 @@ def dispatched(snapshot, project, parent, child, marker, brain):
     if marker != actual:
         return False
     # 绑定前后均认原生创建回执。任务 JSON 中的角色、实例 ID 或登记状态不能单独证明派发。
-    native.verify_creation(parent, child, snapshot.execution_root, actual, task["role"], brain=brain)
+    expected_prompt = None
+    if reference is None and claim.get("prompt_format") == AGY_TASK_PACK_PROMPT:
+        expected_prompt = lambda: native.initial_prompt(project, target, actual)
+    native.verify_creation(parent, child, snapshot.execution_root, actual, task["role"], brain=brain,
+                           expected_prompt=expected_prompt)
     return True
 
 
@@ -208,7 +214,10 @@ class Access:
     def allows_unregistered_write(self, path):
         # 原件登记以定位表为准。原件丢失时仍保护原路径，不能写一个临时副本接管；
         # 同一物理文件可能因 macOS 卷上的大小写或 Unicode 别名拥有不同路径拼法。
-        registered = self.registered_records
+        try:
+            registered = self.registered_records
+        except task_pool.MissingPoolIndex as exc:
+            raise GuardRefusal(DENY_MISSING_POOL_INDEX) from exc
         if path not in registered:
             try:
                 target = path.stat()
@@ -389,6 +398,8 @@ class Access:
                         else:
                             from lib.project.project_discovery import discover_project
                             profile = discover_project(execution)
+                        if argv[0] == "xcodebuild" and not cwd.is_relative_to(module):
+                            continue
                         if profile and any(cwd == execution / item.root and tuple(argv) == cmd.argv
                                            for item in profile.modules for cmd in item.verification_commands):
                             return True
@@ -427,6 +438,7 @@ if __name__ == "__main__":
         ))
         from lib import task_pool
         from lib.hosts import antigravity_dispatch as native
+        from lib.hosts.dispatch_contract import AGY_TASK_PACK_PROMPT
         from lib.hosts.handoff import SCRATCH_SLOT_RE
         from lib.qa_projection import projection_kind
         from lib.safe_text import read_file

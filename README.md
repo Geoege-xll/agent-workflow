@@ -2,7 +2,7 @@
 
 面向 Codex、Claude Code 和 Antigravity 的原生多 Agent 工作流。主会话持续作为 PM 接收需求，按任务重叠、依赖和容量协调原生子代理，按任务选择需求、方案与原型确认，并组织验证和交付。
 
-本源码为 **xy-workflow 3.1.1**，配套 **Native Agent Config 0.1.8**。组件发行状态与下载摘要见包内描述。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
+本源码为 **xy-workflow 3.1.2**，配套 **Native Agent Config 0.1.8**。组件发行状态与下载摘要见包内描述。三个 stable 来源提供正式插件，下载和装载的实际版本以 GitHub Release 和各客户端回执为准。[插件版本源](product/PLUGIN_VERSION) · [固定组件描述](plugins/maintenance/component.json) · [发行记录](docs/plans/stable-product-release.md)
 
 `3.1.0` 的 Antigravity 原型交付由设计角色制作具体 HTML，经静态校验后直接提供文件链接。用户仍确认具体页，工作流将批准绑定到页面依赖指纹。Codex 和 Claude Code 继续使用本机 HTTP 评审。[原型交付说明](docs/usage.md#原型验证与独立-qa)
 

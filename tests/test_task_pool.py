@@ -378,10 +378,11 @@ class TaskPoolTest(unittest.TestCase):
         def transcript(events, target=log):
             target.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
-        creation = invocation("只读取本次完整任务包。\n" + marker)
+        canonical = antigravity_dispatch.initial_prompt(self.root, current["target"], marker)
+        creation = invocation(canonical)
         valid = [creation, response()]
         role_source = (PACK / "roles/xy-qa.md").read_text(encoding="utf-8")
-        role_prompt = marker + "\n" + role_source
+        role_prompt = canonical + "\n\n" + role_source.strip("\n")
         # 真 UUID、同父其它领取或其它父会话中的真事件均不够。聊天、命令输出、
         # 已失败或不相邻的调用也不能借相同字符串生成一条成功绑定。
         other_log = brain / other / relative
@@ -414,19 +415,21 @@ class TaskPoolTest(unittest.TestCase):
                     self.assertIn("native-bound Reviewer", self.rejected_update(path, {"set": {"state": "QA_PASSED"}}))
         # 通用入口必须在同一创建调用实际交付属于当前版本的完整角色，且保留相同领取与工作区。
         transcript([invocation(role_prompt, selector="research"), response()])
-        antigravity_dispatch.verify_creation(parent, child, self.root, marker, "xy-qa")
+        antigravity_dispatch.verify_creation(parent, child, self.root, marker, "xy-qa",
+                                                 expected_prompt=lambda: canonical)
         transcript(valid)
         # 复现 1.5.13 的真实双日志形状。长 Prompt 会被短日志裁切；完整日志携带
         # 原始字符串，子 URI 仍指短日志。命名角色和完整正文交接都必须能首绑。
         full_log = log.with_name("transcript_full.jsonl")
-        for selector, prompt in (("xy-qa", "完整任务包\n" * 1200 + marker), ("research", role_prompt)):
+        for selector, prompt in (("xy-qa", canonical), ("research", role_prompt)):
             short_call = {**invocation(prompt[:64]), "truncated_fields": ["tool_calls"]}
             transcript([short_call, response()])
             full_call = {**creation, "tool_calls": [
                 {"name": "invoke_subagent", "args": {"Prompt": prompt, "TypeName": selector}},
             ]}
             transcript([full_call, response()], full_log)
-            antigravity_dispatch.verify_creation(parent, child, self.root, marker, "xy-qa")
+            antigravity_dispatch.verify_creation(parent, child, self.root, marker, "xy-qa",
+                                                 expected_prompt=lambda: canonical)
         # 完整日志存在而格式不对或证据不符时，不允许改用恰好匹配的短日志。
         transcript(valid)
         for full_events in ([], valid, [full_call, response({**native, "workspaceUris": []})],
@@ -471,6 +474,22 @@ class TaskPoolTest(unittest.TestCase):
         log.unlink()
         self.assertEqual(result, bind())
 
+        # Reproduce the authoritative old claim shape. Its original receipt retains
+        # marker-only binding and the already-bound ID still resumes without logs.
+        legacy = json.loads(claimed)
+        legacy_claim = legacy["task"]["antigravity_claim"]
+        legacy_claim.pop("prompt_format")
+        self.write(path, legacy)
+        marker = antigravity_dispatch.dispatch_marker(self.root, current["target"],
+                                                      current["previous_sha256"], legacy_claim)
+        legacy_receipt = {**current, "dispatch_marker": marker, "claimed_sha256": self.sha(path)}
+        transcript([invocation(marker + "\n旧格式任务说明"), response()])
+        legacy_bound = bind(receipt=legacy_receipt)
+        log.unlink()
+        self.assertEqual(reference := {"host": "antigravity", "agent_id": child}, legacy_bound["agent_ref"])
+        self.assertEqual(legacy_bound, bind(receipt=legacy_receipt))
+        self.assertEqual(reference, json.loads(path.read_bytes())["task"]["agent_ref"])
+
     def test_antigravity_app_display_update_acks_must_precede_the_creation_receipt(self):
         parent, child = (str(uuid4()) for _ in range(2))
         app, cli = self.work / "app-brain", self.work / "cli-brain"
@@ -492,6 +511,7 @@ class TaskPoolTest(unittest.TestCase):
                    + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
                      "There is no need to poll for its response."}
         batch = {**request, "tool_calls": [steps, focus, create]}
+        focus_first = {**request, "tool_calls": [focus, steps, create]}
         focus_ack = {**ack, "step_index": 86}
         batch_receipt = {**receipt, "step_index": 87}
 
@@ -513,10 +533,14 @@ class TaskPoolTest(unittest.TestCase):
         verify()
         write(log, short_request(batch), ack, focus_ack, batch_receipt)
         verify()
+        write(log, short_request(focus_first), ack, focus_ack, batch_receipt)
+        verify()
         write(full, request, ack, receipt)
         verify()
         # 实际 App 原型派发批次有两次界面更新，各自确认后才消费子会话回执。
         write(full, batch, ack, focus_ack, batch_receipt)
+        verify()
+        write(full, focus_first, ack, focus_ack, batch_receipt)
         verify()
         for label, calls in {
                 "different sibling tool": [{**steps, "name": "update_focus"}, create],
@@ -532,8 +556,8 @@ class TaskPoolTest(unittest.TestCase):
         for label, calls in {
                 "different focus tool": [steps, {**focus, "name": "run_command"}, create],
                 "focus has extra args": [steps, {**focus, "args": {**focus["args"], "path": "src/one"}}, create],
-                "reversed updates": [focus, steps, create],
-                "repeated focus": [steps, focus, focus, create],
+                "repeated focus": [focus, focus, create],
+                "repeated steps": [steps, steps, create],
                 "focus batch has multiple creations": [steps, focus, create, create],
                 "wrong encoding for batch": short_request(batch)["tool_calls"],
         }.items():

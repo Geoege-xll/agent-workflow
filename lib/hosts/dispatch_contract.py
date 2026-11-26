@@ -14,10 +14,16 @@ from lib.task_graph import TaskGraphError
 AGY_CONVERSATION_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 AGY_PARENT_ERROR = "AGY dispatch requires --pm-id antigravity:<current parent conversation UUID>"
 AGY_RELEASE_ERROR = "AGY release requires the current PM task pool and original dispatch marker"
+AGY_TASK_PACK_PROMPT = "task-pack-v1"
 
 
 def validate_claim(claim: dict) -> None:
-    if (not isinstance(claim, dict) or set(claim) != {"parent", "nonce"}
+    fields = {"parent", "nonce"}
+    if isinstance(claim, dict) and "prompt_format" in claim:
+        if claim["prompt_format"] != AGY_TASK_PACK_PROMPT:
+            raise TaskGraphError("unsupported AGY claim prompt format")
+        fields.add("prompt_format")
+    if (not isinstance(claim, dict) or set(claim) != fields
             or not isinstance(claim["parent"], str) or not AGY_CONVERSATION_UUID.fullmatch(claim["parent"])
             or not isinstance(claim["nonce"], str) or not re.fullmatch(r"[0-9a-f]{64}", claim["nonce"])):
         raise TaskGraphError("invalid AGY parent or claim nonce")

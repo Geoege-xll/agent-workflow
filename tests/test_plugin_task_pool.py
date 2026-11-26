@@ -414,7 +414,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
         original.write_text(json.dumps(value), encoding="utf-8")
         before = original.read_bytes()
 
-        # 使用同一个在途旧格式原件。从两个独立包真实运行核验及恢复，
+        # 使用同一个在途已绑定原件。从两个独立包真实运行核验及恢复，
         # 即使没有 AGY 解释器也要识别任务占用和有效身份，并拒绝相同父子 UUID。
         modules = ("lib/hosts/antigravity_dispatch.py", "lib/hosts/antigravity_handoff.py", "hooks/write_guard.py")
         for other in ("codex", "claude"):
@@ -479,19 +479,40 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual("claimed", result["status"])
         self.assertRegex(result["dispatch_marker"], r"^XY-WORKFLOW-CLAIM [0-9a-f]{64}$")
         claim_sha = digest(path)
+        self.assertEqual("task-pack-v1", task_in(path)["antigravity_claim"]["prompt_format"])
+
+        receipt = scratch / "claim.json"
+        receipt.write_text(json.dumps(result), encoding="utf-8")
+        handoff = self.host_delivery(host, parent_log, POOL, "handoff", "--root", self.project,
+                                     "--pm-id", self.agy_pm, "--receipt", receipt)
+        self.assertEqual(result["target"], handoff["target"])
+        self.assertEqual(task["role"], handoff["role"])
+        prompt = handoff["prompt"]
+        received = json.loads(prompt.splitlines()[3])
+        self.assertEqual(task["owned_paths"], received["task"]["owned_paths"])
+        self.assertEqual(pack["standards_contract"], received["standards_contract"])
 
         child = str(uuid4())
         marker = result["dispatch_marker"]
         child_start = {"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
                        "content": f"\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender={pm} "
-                                  f"priority=MESSAGE_PRIORITY_HIGH content={marker}\n执行当前任务\n</SYSTEM_MESSAGE>"}
+                                  f"priority=MESSAGE_PRIORITY_HIGH content={prompt}\n</SYSTEM_MESSAGE>"}
         child_log = self.agy_log(child, child_start, app=True).with_name("transcript.jsonl")
+        bind = ("bind", "--root", self.project, "--pm-id", self.agy_pm, "--receipt", receipt,
+                "--host", host, "--agent-id", child)
+        stripped_tag = prompt.replace("\nXY-WORKFLOW-TASK-PACK-V1\n", "\n")
+        for invalid in (stripped_tag, marker + "\nImplement all 56 pages.", prompt + "\nAlso implement 56 pages.",
+                        prompt.replace("src/totals.py", "src/other.py")):
+            parent_log = self.agy_parent_log(pm, child_log, marker, task["role"], self.project,
+                                             app=True, with_steps=True, prompt=invalid).with_name("transcript.jsonl")
+            self.assertIn("no matching native", self.host_delivery(host, parent_log, POOL, *bind, code=2)["error"])
+            self.assertEqual("deny", self.hook_decision(child_log, "edit_file", {"Path": task["owned_paths"][0]}))
+            self.assertEqual(claim_sha, digest(path))
         parent_log = self.agy_parent_log(pm, child_log, marker, task["role"], self.project,
-                                         app=True, with_steps=True).with_name("transcript.jsonl")
-        receipt = scratch / "claim.json"
-        receipt.write_text(json.dumps(result), encoding="utf-8")
-        bound = self.host_delivery(host, parent_log, POOL, "bind", "--root", self.project, "--pm-id", self.agy_pm,
-                                   "--receipt", receipt, "--host", host, "--agent-id", child)
+                                         app=True, with_steps=True, prompt=prompt).with_name("transcript.jsonl")
+        bound = self.host_delivery(host, parent_log, POOL, *bind)
+        self.assertEqual("allow", self.hook_decision(child_log, "edit_file", {"Path": task["owned_paths"][0]}))
+        self.assertEqual("deny", self.hook_decision(child_log, "edit_file", {"Path": "src/other.py"}))
 
         # Assert the exact packaged host command shape described to PM and use the same argv after PreToolUse.
         def recipe(fragment, **slots):
@@ -521,26 +542,99 @@ class PackagedTaskPoolTest(unittest.TestCase):
                                       capture_output=True, text=True, timeout=30)
         self.assertEqual(0, worker_check.returncode, worker_check.stderr)
         self.assertIn("Ran 2 tests", worker_check.stderr)
-        evidence = f"{check} (exit {worker_check.returncode})\n{worker_check.stderr}"
-        patch = scratch / "writer-result.json"
-        self.assertEqual("allow", self.hook_decision(parent_log, "write_file", {"Path": str(patch)}))
-        example = completion.split("```json\n", 1)[1].split("\n```", 1)[0]
-        patch_json = example.replace("<task-id>", row["task_id"]).replace('"<accepted-build-verification>"',
-                                                                           json.dumps(evidence, ensure_ascii=False))
-        patch.write_text(patch_json, encoding="utf-8")
-        update_slots = {"record": row["record"], "patch-file": patch}
-        update = recipe(f"{GRAPH} update", **update_slots, **{"record-sha256": row["sha256"]})
-        self.host_command(host, child_log, update, denied=True)
-        stale = recipe(f"{GRAPH} update", **update_slots, **{"record-sha256": claim_sha})
-        self.assertIn("fingerprint differs", self.host_command(host, parent_log, stale, code=2)["error"])
+        # The PM has reviewed the actual exit and full log before attesting in the
+        # command. The synthetic Inbox receipt is a native result locator, not proof of success.
+        evidence = f"{check} exit {worker_check.returncode} native log ran 2 tests"
+        source = f"native-inbox:{child}/light-result"
+        pool_root, = (self.workspace / "agent-workflow-request-scratch").glob("*/task-pools")
+        sibling = pool_root / hashlib.sha256(("antigravity:" + str(uuid4())).encode()).hexdigest()
+        sibling.mkdir(mode=0o700)
+        refused = self.hook_decision(parent_log, "write_file", {"Path": str(scratch / "writer-result.json")},
+                                     with_reason=True)
+        self.assertEqual("deny", refused["decision"])
+        self.assertIn("index.json", refused["reason"])
+        slots = {"record": path, "request-id": row["request_id"], "task-id": row["task_id"],
+                 "bound-child-uuid": child, "native-result-reference": source,
+                 "accepted-build-verification-with-log-reference": evidence, "parent-uuid": pm,
+                 "record-sha256": row["sha256"]}
+
+        def settle(**changes):
+            return recipe(f"{POOL} complete-writer", **{**slots, **changes})
+
+        self.host_command(host, child_log, settle(), denied=True)
+        self.host_command(host, parent_log, [*settle(), "--state", "QA_PASSED"], denied=True)
+        stale = settle(**{"record-sha256": claim_sha})
+        self.assertIn("fingerprint changed", self.host_command(host, parent_log, stale, code=2)["error"])
+        wrong_id = settle(**{"bound-child-uuid": str(uuid4())})
+        self.assertIn("native-bound Writer", self.host_command(host, parent_log, wrong_id, code=2)["error"])
+        missing = settle(**{"accepted-build-verification-with-log-reference": " "})
+        self.assertIn("accepted verification", self.host_command(host, parent_log, missing, code=2)["error"])
+        failed = settle()
+        failed[failed.index("--verification-exit-code") + 1] = "1"
+        self.assertIn("successful verification", self.host_command(host, parent_log, failed, code=2)["error"])
         self.assertEqual(row["sha256"], digest(path))
-        updated = self.host_command(host, parent_log, update)
-        self.assertTrue(updated["updated"])
+        updated = self.host_command(host, parent_log, settle())
+        self.assertEqual(("completed", "BUILD_VERIFIED", False),
+                         (updated["status"], updated["state"], updated["active"]))
         settled = self.host_command(host, parent_log, view)
         self.assertEqual([], settled["errors"])
         self.assertEqual([{**row, "sha256": updated["sha256"], "state": "BUILD_VERIFIED", "active": False}],
                          settled["tasks"])
-        self.assertEqual([*task["acceptance_evidence"], evidence], task_in(path)["acceptance_evidence"])
+        self.assertEqual([*task["acceptance_evidence"], f"{evidence} | Native result: {source}"],
+                         task_in(path)["acceptance_evidence"])
+        self.assertEqual([], list(sibling.iterdir()))
+
+    def test_antigravity_full_writer_completion_requires_acknowledged_revision(self):
+        host = "antigravity"
+        pm_id = self.agy_pm
+        pm = pm_id.split(":")[1]
+        start = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"}
+        parent = self.agy_log(pm, start, app=True).with_name("transcript.jsonl")
+        request = "full-writer"
+        scratch = Path(self.host_delivery(host, parent, GRAPH, "scratch", "--root", self.project,
+                                         "--request-id", request)["scratch_dir"])
+        record = scratch / "full.json"
+        original = graph()
+        original.update(request_id=request, active_paths=[], active_semantic_locks=[])
+        writer = original["tasks"][0]
+        for task in original["tasks"]:
+            task["request_id"] = request
+        record.write_text(json.dumps(original), encoding="utf-8")
+        target = ("--record", record, "--request-id", request, "--task-id", writer["id"])
+        claim = self.host_delivery(host, parent, POOL, "claim", "--root", self.project, "--pm-id", pm_id,
+                                   *target, "--expect-sha256", digest(record), "--register", *CAPACITY)
+        receipt = scratch / "claim.json"
+        receipt.write_text(json.dumps(claim), encoding="utf-8")
+        handoff = self.host_delivery(host, parent, POOL, "handoff", "--root", self.project,
+                                     "--pm-id", pm_id, "--receipt", receipt)
+        self.assertEqual(writer["owned_paths"], json.loads(handoff["prompt"].splitlines()[3])["task"]["owned_paths"])
+        parent, child = self.bind_agy(claim, writer["role"], self.project, app_receipt=receipt,
+                                      prompt=handoff["prompt"])
+        row = self.locate(host, writer["goal"])
+        reference = row["agent_ref"]
+        revised = self.update(host, row, {"revise": {"set": {"goal": "Revised Full Writer"},
+                                                    "source": "user:current-requirement"}})
+        self.assertEqual("allow", self.hook_decision(child, "edit_file", {"Path": writer["owned_paths"][0]}))
+        revision = task_in(record)["task_revision"]
+        completion = ("complete-writer", "--root", self.project, "--pm-id", pm_id, *target, "--agent-id",
+                      reference["agent_id"], "--verification-exit-code", "0", "--source", "native-inbox:current",
+                      "--evidence", "current build exit 0 and runnable evidence in native log")
+        self.assertIn("acknowledged task revision", self.host_delivery(
+            host, parent, POOL, *completion, "--expect-sha256", revised["sha256"], "--revision", revision,
+            code=2)["error"])
+        proof = {"revision": revision, "agent_ref": reference}
+        ack = self.update(host, row, {"ack_revision": {**proof, "delivery_source": "native:delivered",
+                                                       "ack_source": "native:acknowledged"}},
+                          expected=revised["sha256"])
+        latest = ("--expect-sha256", ack["sha256"])
+        self.assertIn("acknowledged task revision", self.host_delivery(
+            host, parent, POOL, *completion, *latest, "--revision", revision - 1, code=2)["error"])
+        result = self.host_delivery(host, parent, POOL, *completion, *latest, "--revision", revision)
+        self.assertEqual(("BUILD_VERIFIED", False), (result["state"], result["active"]))
+        self.assertEqual({**proof, "source": "native-inbox:current"}, task_in(record)["revision_result"])
+        completed = json.loads(record.read_bytes())
+        self.assertEqual(original["approved_gates"], completed["approved_gates"])
+        self.assertEqual(original["tasks"][1:], completed["tasks"][1:])
 
     def agy_log(self, identifier, *events, short_events=None, app=False):
         client = "antigravity" if app else "antigravity-cli"
@@ -831,51 +925,57 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual(log.parents[2].name, task_in(path)["agent_ref"]["agent_id"])
         return path, parent_log, log
 
-    def bind_agy(self, claim, role, execution_root, *, app_receipt=None):
+    def bind_agy(self, claim, role, execution_root, *, app_receipt=None, prompt=None):
         marker = claim["dispatch_marker"]
         pm, child = self.agy_pm.split(":")[1], str(uuid4())
+        receipt_path = app_receipt if app_receipt is not None else self.workspace / (child + "-claim.json")
+        if not receipt_path.exists():
+            receipt_path.write_text(json.dumps(claim), encoding="utf-8")
+        if prompt is None:
+            prompt = self.pool("antigravity", "handoff", "--receipt", receipt_path)["prompt"]
         log = self.agy_log(child, {"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
             "content": "\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender=" + pm
-                       + " priority=MESSAGE_PRIORITY_HIGH content=" + marker + "\n执行当前任务\n</SYSTEM_MESSAGE>"},
+                       + " priority=MESSAGE_PRIORITY_HIGH content=" + prompt + "\n</SYSTEM_MESSAGE>"},
                            app=app_receipt is not None)
         parent_log = self.agy_parent_log(pm, log, marker, role, execution_root, app=app_receipt is not None,
-                                         with_steps=app_receipt is not None)
+                                         with_steps=app_receipt is not None, prompt=prompt)
         if app_receipt is not None:
             parent_log = parent_log.with_name("transcript.jsonl")
             self.assertEqual("allow", self.hook_decision(parent_log, "write_file", {"Path": str(app_receipt)}))
-            app_receipt.write_text(json.dumps(claim), encoding="utf-8")
-            bound = self.host_delivery("antigravity", parent_log, POOL, "bind", "--root", self.project,
-                                       "--pm-id", self.agy_pm, "--receipt", app_receipt,
-                                       "--host", "antigravity", "--agent-id", child)
+        arguments = ("bind", "--root", self.project, "--pm-id", self.agy_pm,
+                     "--receipt", receipt_path, "--host", "antigravity", "--agent-id", child)
+        if app_receipt is not None:
+            bound = self.host_delivery("antigravity", parent_log, POOL, *arguments)
             self.assertEqual({"host": "antigravity", "agent_id": child}, bound["agent_ref"])
             return parent_log, log.with_name("transcript.jsonl")
-        receipt_path = self.workspace / (child + "-claim.json")
-        receipt_path.write_text(json.dumps(claim), encoding="utf-8")
         plugin = self.plugins["antigravity"]
         command = ["bash", str(plugin / "lib/python_runtime.sh"), "-B", "-X", "utf8",
                    str(plugin / "plugins/source_pack.py"), "helper", "--project", str(self.project),
-                   POOL, "bind", "--root", str(self.project), "--pm-id", self.agy_pm,
-                   "--receipt", str(receipt_path), "--host", "antigravity", "--agent-id", child]
+                   POOL, *map(str, arguments)]
         result = subprocess.run(command, cwd=self.project, env=self.agy_environment(), text=True,
                                 capture_output=True, timeout=45)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({"host": "antigravity", "agent_id": child}, json.loads(result.stdout)["agent_ref"])
         return parent_log, log
 
-    def agy_parent_log(self, pm, child_log, marker, role, execution_root, *, app=False, with_steps=False):
+    def agy_parent_log(self, pm, child_log, marker, role, execution_root, *, app=False, with_steps=False,
+                       prompt=None):
         receipt = {"conversationId": child_log.parents[2].name,
                    "logAbsoluteUri": child_log.with_name("transcript.jsonl").as_uri(),
                    "workspaceUris": [execution_root.as_uri()]}
         start = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"}
-        calls = [{"name": "invoke_subagent", "args": {"TypeName": role, "Prompt": marker}}]
+        calls = [{"name": "invoke_subagent", "args": {"TypeName": role, "Prompt": marker if prompt is None else prompt}}]
         request = {"step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "tool_calls": calls}
         results = []
         timestamps = ""
         if with_steps:
-            calls.insert(0, {"name": "update_steps", "args": {"steps": [{"status": "in_progress", "title": "派发实现者"}]}})
+            calls[:0] = [
+                {"name": "update_focus", "args": {"focus": "派发实现者"}},
+                {"name": "update_steps", "args": {"steps": [{"status": "in_progress", "title": "派发实现者"}]}},
+            ]
             timestamps = "Created At: 2026-11-23T10:57:46+08:00\nCompleted At: 2026-11-23T10:57:48+08:00\n" * 2
-            results.append({"step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
-                            "content": timestamps + "OK"})
+            results.extend({"step_index": index, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                            "content": timestamps + "OK"} for index in (2, 3))
         results.append({"step_index": 2 + len(results), "source": "MODEL", "type": "GENERIC", "status": "DONE",
                         "content": timestamps + "Created the following subagent:\n" + json.dumps(receipt)
                         + "\nThe subagent will send you a message when it has completed its task or requires guidance. "
@@ -891,14 +991,19 @@ class PackagedTaskPoolTest(unittest.TestCase):
         claim = self.claim(host, self.locate(host, "修正"))
         marker = claim["dispatch_marker"]
         claimed = path.read_bytes()
+        scratch = self.invoke(host, GRAPH, "scratch", "--root", self.project, "--request-id", "changes")
+        receipt = Path(scratch["scratch_dir"]) / "claim.json"
+        receipt.write_text(json.dumps(claim), encoding="utf-8")
+        prompt = self.pool(host, "handoff", "--receipt", receipt)["prompt"]
         child_start = {"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
                        "content": f"\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender={pm} "
-                                  f"priority=MESSAGE_PRIORITY_HIGH content={marker}\n执行当前任务\n</SYSTEM_MESSAGE>"}
+                                  f"priority=MESSAGE_PRIORITY_HIGH content={prompt}\n</SYSTEM_MESSAGE>"}
         app_child = self.agy_log(child, child_start, app=True).with_name("transcript.jsonl")
         cli_child = self.agy_log(child, child_start)
 
         def dispatch(log, *, app=False):
-            return self.agy_parent_log(pm, log, marker, "xy-backend", self.project, app=app)
+            return self.agy_parent_log(pm, log, marker, "xy-backend", self.project,
+                                       app=app, with_steps=app, prompt=prompt)
 
         target = {"Path": "src/fixture.txt"}
         cli_parent = dispatch(cli_child)
@@ -907,9 +1012,6 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual("deny", result["decision"])
         self.assertIn("无法核对当前子会话的可写派发", result["reason"])
 
-        scratch = self.invoke(host, GRAPH, "scratch", "--root", self.project, "--request-id", "changes")
-        receipt = Path(scratch["scratch_dir"]) / "claim.json"
-        receipt.write_text(json.dumps(claim), encoding="utf-8")
 
         def bind(log, code=0):
             return self.host_delivery(host, log, POOL, "bind", "--root", self.project, "--pm-id", self.agy_pm,
@@ -938,6 +1040,64 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertEqual({"host": host, "agent_id": child}, bound["agent_ref"])
         self.assertEqual(bound["agent_ref"], task_in(path)["agent_ref"])
 
+    def test_antigravity_binds_revised_withdrawn_claim_only_to_stop_its_child(self):
+        host = "antigravity"
+        request = "revise-before-stop"
+        pm, child = self.agy_pm.split(":")[1], str(uuid4())
+        owned = "src/fixture.txt"
+        path = self.register(host, request, "Original scope", light=True, owned=owned)
+        old_row = self.locate(host, request)
+        claim = self.claim(host, old_row)
+        marker = claim["dispatch_marker"]
+        scratch = self.invoke(host, GRAPH, "scratch", "--root", self.project, "--request-id", request)
+        receipt = Path(scratch["scratch_dir"]) / "claim.json"
+        receipt.write_text(json.dumps(claim), encoding="utf-8")
+        prompt = self.pool(host, "handoff", "--receipt", receipt)["prompt"]
+        start = {
+            "step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+            "content": f"\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender={pm} "
+                       f"priority=MESSAGE_PRIORITY_HIGH content={prompt}\n</SYSTEM_MESSAGE>",
+        }
+        child_log = self.agy_log(child, start, app=True).with_name("transcript.jsonl")
+
+        def dispatch(workspace):
+            return self.agy_parent_log(pm, child_log, marker, "xy-backend", workspace,
+                                       app=True, prompt=prompt).with_name("transcript.jsonl")
+
+        bind = ("bind", "--root", self.project, "--pm-id", self.agy_pm, "--receipt", receipt,
+                "--host", host, "--agent-id", child)
+        edit = {"Path": owned}
+        parent = dispatch(self.project)
+        self.assertEqual("allow", self.hook_decision(child_log, "edit_file", edit))
+        running = self.locate(host, request)
+        revised = self.update(host, running, {"revise": {"set": {"goal": "Revised scope"},
+                                                         "source": "user:change-before-binding"}})
+        self.assertIn("no matching native", self.host_delivery(host, parent, POOL, *bind, code=2)["error"])
+        self.assertEqual(revised["sha256"], digest(path))
+        self.assertEqual("deny", self.hook_decision(child_log, "edit_file", edit))
+
+        stopped = self.update(host, running, {"withdraw": {"reason": "user:withdraw-revised-task"}},
+                              expected=revised["sha256"])
+        row = self.locate(host, request)
+        self.assertEqual(("STOP_REQUESTED", True, stopped["sha256"]), (row["state"], row["active"], row["sha256"]))
+        self.assertEqual("deny", self.hook_decision(child_log, "edit_file", edit))
+        wrong_parent = dispatch(self.workspace)
+        self.assertIn("no matching native", self.host_delivery(host, wrong_parent, POOL, *bind, code=2)["error"])
+        self.assertEqual(stopped["sha256"], digest(path))
+
+        parent = dispatch(self.project)
+        bound = self.host_delivery(host, parent, POOL, *bind)
+        reference = {"host": host, "agent_id": child}
+        self.assertEqual(reference, bound["agent_ref"])
+        row = self.locate(host, request)
+        self.assertEqual(("STOP_REQUESTED", True, bound["sha256"]), (row["state"], row["active"], row["sha256"]))
+        self.assertEqual("deny", self.hook_decision(child_log, "edit_file", edit))
+
+        self.update(host, row, {"confirm_stop": {"agent_ref": reference, "observed_state": "stopped",
+                                                 "source": "native:stop-receipt"}})
+        row = self.locate(host, request)
+        self.assertEqual(("WITHDRAWN", False, reference), (row["state"], row["active"], row["agent_ref"]))
+
     def test_antigravity_design_child_can_query_one_topic_read_only(self):
         path, _, log = self.claim_agy_design()
         plugin = self.plugins["antigravity"]
@@ -958,7 +1118,9 @@ class PackagedTaskPoolTest(unittest.TestCase):
         bind_requirement_documents(self.project)
         graph, _ = visual_request("UI-Page")
         first = graph["tasks"][0]
-        first.update(state="DECLARED", blocks=[])
+        first.update(state="DECLARED", blocks=[], goal="更新本任务原型",
+                     input_contracts=["只使用此任务的页面范围"], output_contracts=["交付当前 HTML"],
+                     verification_commands=["静态核验当前原型"], acceptance_evidence=["页面静态验证通过"])
         other = copy.deepcopy(first)
         page = self.project / first["owned_paths"][0]
         sibling = page.with_name("profile.html")
@@ -1055,16 +1217,18 @@ class PackagedTaskPoolTest(unittest.TestCase):
         view = ("view", "--root", self.project, "--pm-id", self.agy_pm, "--query", task["request_id"])
         row, = self.host_delivery(host, pm, POOL, *view)["tasks"]
         accepted = f"原生设计实例静态通过 {relative}，exit 0，dependency_fingerprint={fingerprint}"
-        patch = record.with_name("writer-result.json")
-        self.assertEqual("allow", self.hook_decision(pm, "write_file", {"Path": str(patch)}))
-        patch.write_text(json.dumps({"tasks": {task["id"]: {
-            "set": {"state": "BUILD_VERIFIED"}, "append": {"acceptance_evidence": [accepted]},
-        }}}, ensure_ascii=False), encoding="utf-8")
-        updated = self.host_delivery(host, pm, GRAPH, "update", "--root", self.project, "--input", record,
-                                     "--patch", patch, "--expect-sha256", row["sha256"])
+        source = f"native-inbox:{child.parents[2].name}/prototype-result"
+        updated = self.host_delivery(host, pm, POOL, "complete-writer", "--root", self.project,
+                                     "--pm-id", self.agy_pm, "--record", record, "--request-id", row["request_id"],
+                                     "--task-id", row["task_id"], "--expect-sha256", row["sha256"],
+                                     "--agent-id", row["agent_ref"]["agent_id"], "--verification-exit-code", "0",
+                                     "--source", source, "--evidence", accepted)
         self.assertEqual([{**row, "sha256": updated["sha256"], "state": "BUILD_VERIFIED", "active": False}],
                          self.host_delivery(host, pm, POOL, *view)["tasks"])
-        self.assertEqual([*task["acceptance_evidence"], accepted], task_in(record)["acceptance_evidence"])
+        self.assertEqual([*task["acceptance_evidence"], f"{accepted} | Native result: {source}"],
+                         task_in(record)["acceptance_evidence"])
+        patch = record.with_name("writer-result.json")
+        patch.write_text("retained verification attachment", encoding="utf-8")
         self.host_delivery(host, pm, FEEDBACK, "open", *review, denied=True)
         self.assertEqual(evidence, self.host_delivery(host, pm, PROTOTYPE, *static,
                          "--expect", f"{page.name}={fingerprint}"))
@@ -1228,27 +1392,39 @@ class PackagedTaskPoolTest(unittest.TestCase):
                      "jobs/pyproject.toml": '[tool.poetry]\nname="jobs"\nversion="1"\n[tool.poetry.group.dev.dependencies]\npytest="^9"',
                      "jobs/poetry.lock": "package = []\n",
                      "ios/App.xcodeproj/project.pbxproj": ('// !$*UTF8*$!\n{\n objects = {\n A1 = {\n isa = PBXNativeTarget;\n'
-                                                          ' productType = "com.apple.product-type.application";\n };\n };\n}\n'),
-                     "ios/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme": '<Scheme version="1.7"/>'}
+                                                          ' productType = "com.apple.product-type.application";\n'
+                                                          ' IPHONEOS_DEPLOYMENT_TARGET = 16.0;\n };\n };\n}'),
+                     "ios/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme": '<Scheme version="1.7"/>',
+                     "ios/App.xcworkspace/contents.xcworkspacedata":
+                         '<Workspace><FileRef location="group:App.xcodeproj"/></Workspace>'}
         for relative, body in manifests.items():
             file = self.project / relative
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text(body, encoding="utf-8")
+        device = ("xcodebuild -workspace App.xcworkspace -scheme App -destination "
+                  "generic/platform=iOS CODE_SIGNING_ALLOWED=NO build")
+        wrong_bundle = device.replace("App.xcworkspace", "../App.xcworkspace")
+        override = device.replace("CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_ALLOWED=YES")
+        simulator = device.replace("generic/platform=iOS", "'generic/platform=iOS Simulator'")
         checks = ["python3 test_total.py", "./gradlew test", "uv run pytest", "poetry run pytest",
-                  "xcodebuild -scheme App build", "python3 -c 'print(1)'"]
-        self.update(host, self.locate(host, "修正"), {"set": {"verification_commands": checks}})
+                  "xcodebuild -scheme App build", "python3 -c 'print(1)'", device, wrong_bundle, override,
+                  simulator.replace("CODE_SIGNING_ALLOWED=NO ", "")]
+        self.update(host, self.locate(host, "修正"), {"set": {"verification_commands": checks},
+                    "append": {"acceptance_evidence": ["构建证据 " * 800]}})
         claim = self.claim(host, self.locate(host, "修正"))
-        marker = claim["dispatch_marker"]
+        receipt = self.workspace / "fixture-claim.json"
+        receipt.write_text(json.dumps(claim), encoding="utf-8")
+        prompt = self.pool(host, "handoff", "--receipt", receipt)["prompt"]
         child = str(uuid4())
         child_log = self.agy_log(child, {
             "step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
             "content": "\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:01:46Z sender=" + pm
-                       + " priority=MESSAGE_PRIORITY_HIGH content=" + marker + "\n实现当前任务\n</SYSTEM_MESSAGE>",
+                       + " priority=MESSAGE_PRIORITY_HIGH content=" + prompt + "\n</SYSTEM_MESSAGE>",
         })
         def dispatch(role, receipt_fields=None):
             # 真长提示词在 1.5.13 的短日志中丢失独立标记。Hook 必须使用完整日志
             # 的原始字符串参数，且创建回执里的子 URI 仍按短日志定位。
-            call = {"name": "invoke_subagent", "args": {"TypeName": role, "Prompt": "完整任务包\n" * 1200 + marker}}
+            call = {"name": "invoke_subagent", "args": {"TypeName": role, "Prompt": prompt}}
             receipt = {"conversationId": child, "logAbsoluteUri": child_log.with_name("transcript.jsonl").as_uri(),
                        "workspaceUris": [self.project.as_uri()]}
             start = {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE"}
@@ -1277,7 +1453,11 @@ class PackagedTaskPoolTest(unittest.TestCase):
             for cmd, subdir, allowed in (("./gradlew test", ".", "allow"), ("uv run pytest", "api", "allow"),
                                          ("poetry run pytest", "jobs", "allow"), ("xcodebuild -scheme App build", "ios", "allow"),
                                          ("uv run pytest", "jobs", "deny"), ("./gradlew build", ".", "deny"),
-                                         ("python3 -c 'print(1)'", ".", "deny")):
+                                         ("python3 -c 'print(1)'", ".", "deny"), (device, "ios", "allow"),
+                                         (device, ".", "deny"), (wrong_bundle, "ios", "deny"),
+                                         (override, "ios", "deny"), (device + " && git status", "ios", "deny"),
+                                         (simulator, "ios", "deny"),
+                                         (simulator.replace("CODE_SIGNING_ALLOWED=NO ", ""), "ios", "allow")):
                 with self.subTest(actor=current, command=cmd, directory=subdir):
                     self.assertEqual(allowed, self.hook_decision(current, "run_command", {
                         "CommandLine": cmd, "Cwd": str(self.project / subdir)}))

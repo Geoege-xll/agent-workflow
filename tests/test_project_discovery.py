@@ -1705,6 +1705,71 @@ class ProjectVerificationCommandContractTest(unittest.TestCase):
                     commands,
                 )
 
+    def test_xcode_candidates_use_owned_workspace_and_shared_schemes(self) -> None:
+        project = """// !$*UTF8*$!
+{
+ objects = {
+  A1 = {
+   isa = PBXNativeTarget;
+   productType = "com.apple.product-type.application";
+  };
+  A2 = {
+   isa = XCBuildConfiguration;
+   buildSettings = {
+    SDKROOT = iphoneos;
+   };
+  };
+ };
+}
+"""
+        workspace = "ios/New O2O.xcworkspace"
+        pods = "ios/Pods/Pods.xcodeproj/project.pbxproj"
+        ignored_project = "ios/vendor/Toolkit.xcodeproj/project.pbxproj"
+        def workspace_file(*secondary):
+            references = ("App.xcodeproj", *secondary)
+            return "<Workspace>" + "".join(f'<FileRef location="group:{ref}"/>' for ref in references) + "</Workspace>"
+
+        with tempfile.TemporaryDirectory(prefix="xcode-workspaces-") as temporary:
+            root = Path(temporary)
+            self._write_tree(root, {
+                "ios/App.xcodeproj/project.pbxproj": project,
+                "ios/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme": "<Scheme/>",
+                "ios/App.xcodeproj/xcuserdata/user/xcschemes/Private.xcscheme": "<Scheme/>",
+                pods: project.replace(".application", ".library.static"),
+                ignored_project: project,
+                f"{workspace}/contents.xcworkspacedata": workspace_file("Pods/Pods.xcodeproj", "vendor/Toolkit.xcodeproj"),
+                f"{workspace}/xcshareddata/xcschemes/Workspace.xcscheme": "<Scheme/>",
+                "ios/Stale.xcworkspace/contents.xcworkspacedata": "<Workspace><Broken",
+                "ios/Outside.xcworkspace/contents.xcworkspacedata": workspace_file("../outside/Other.xcodeproj"),
+                "ios/Dangling.xcworkspace/contents.xcworkspacedata": workspace_file("Missing.xcodeproj"),
+                "ios/Alias.xcworkspace/contents.xcworkspacedata": workspace_file("Alias.xcodeproj"),
+                "ios/AliasManifest.xcworkspace/contents.xcworkspacedata": workspace_file("vendor/Alias.xcodeproj"),
+                "ios/CrossModule.xcworkspace/contents.xcworkspacedata": workspace_file("nested/Other.xcodeproj"),
+                "ios/nested/Other.xcodeproj/project.pbxproj": project,
+            })
+            (root / "ios/Alias.xcodeproj").symlink_to(root / "ios/App.xcodeproj")
+            alias_manifest = root / "ios/vendor/Alias.xcodeproj/project.pbxproj"
+            alias_manifest.parent.mkdir()
+            alias_manifest.symlink_to(root / pods)
+            profile = discover_project(root)
+        commands = {argv: paths for _, argv, paths in self._commands(profile, "ios")}
+        for selector, bundle, schemes in (
+            ("-project", "App.xcodeproj", ("App",)),
+            ("-workspace", "New O2O.xcworkspace", ("App", "Workspace")),
+        ):
+            for scheme in schemes:
+                prefix = ("xcodebuild", selector, bundle, "-scheme", scheme)
+                self.assertIn((*prefix, "build"), commands)
+                for destination in ("generic/platform=iOS", "generic/platform=iOS Simulator"):
+                    evidence = commands[(*prefix, "-destination", destination, "CODE_SIGNING_ALLOWED=NO", "build")]
+                    self.assertIn("ios/App.xcodeproj/project.pbxproj", evidence)
+                    if selector == "-workspace":
+                        self.assertIn(f"{workspace}/contents.xcworkspacedata", evidence)
+                        self.assertIn(pods, evidence)
+                        self.assertIn(ignored_project, evidence)
+                self.assertIn((*prefix, "-destination", "generic/platform=iOS Simulator", "build"), commands)
+        self.assertEqual(13, len(commands))
+
     def test_nearest_checked_in_ancestor_wrapper_wins_for_nested_modules(self) -> None:
         profile = self._discover_files(
             {

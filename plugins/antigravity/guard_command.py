@@ -293,6 +293,23 @@ def packaged_helper(words, access, plugin, cwd, *, redirected=False):
             return False
         output = project / values["--output"]
         return access.scratch_file(output) and access.can_write(str(output), project)
+    if helper == "lib/task_pool_cli.py" and action in {"handoff", "complete-writer"}:
+        if access.parent or redirected:
+            return False
+        required = {"--root", "--pm-id"}
+        if action == "handoff":
+            required.add("--receipt")
+            allowed = required
+            file = "--receipt"
+        else:
+            required.update({"--record", "--request-id", "--task-id", "--expect-sha256", "--agent-id",
+                             "--verification-exit-code", "--source", "--evidence"})
+            allowed = required | {"--revision"}
+            file = "--record"
+        values = options(rest, allowed)
+        return (required <= values.keys() and access.project_root(values["--root"], expected=project)
+                and values["--pm-id"] == "antigravity:" + access.current
+                and access.scratch_file(project / values[file], project))
     if helper == "lib/task_pool_cli.py" and action in POOL_COMMANDS:
         values = options(rest, POOL_FLAGS)
         return (access.project_root(values.get("--root"), expected=project) and not access.parent

@@ -16,7 +16,7 @@ import sys
 from lib import task_graph_records as records, task_pool
 from lib.agent_continuation import HOSTS
 from lib.dispatch_admission_cli import _project_directory
-from lib.hosts.factory import dispatch_policy
+from lib.hosts.factory import dispatch_policy, packaged_host
 from lib.task_graph import TaskGraphError
 
 
@@ -57,6 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     bind.add_argument("--receipt", type=Path, required=True)
     bind.add_argument("--host", choices=HOSTS, required=True)
     bind.add_argument("--agent-id", required=True)
+    handoff = sub.add_parser("handoff", parents=[common], help="从当前 AGY 原件生成初次派发 Prompt")
+    handoff.add_argument("--receipt", type=Path, required=True)
+    finish = sub.add_parser("complete-writer", parents=[common], help="登记 PM 已核定的 AGY Writer 验证结果")
+    for field in ("record", "expect-sha256", "request-id", "task-id", "agent-id", "source", "evidence"):
+        finish.add_argument("--" + field, required=True)
+    finish.add_argument("--revision", type=int)
+    finish.add_argument("--verification-exit-code", required=True, type=int)
     for cmd in (view, claim, release):
         for flag in ("configured-subagents", "configured-writers", "host-available-subagents"):
             cmd.add_argument("--" + flag, type=int, required=cmd is not view)
@@ -81,6 +88,18 @@ def main(argv: list[str] | None = None) -> int:
                                    dispatch_target=target, policy=policy)
             result = task_pool.operate(root, args.pm_id, "claim", _capacity(args), target=target,
                                        expected=args.expect_sha256, policy=policy)
+        elif args.command in {"handoff", "complete-writer"}:
+            if packaged_host() != "antigravity":
+                raise TaskGraphError("this operation requires the Antigravity plugin package")
+            if args.command == "handoff":
+                receipt = records.decode(records.read_record(args.receipt))
+                result = task_pool.agy_handoff(root, args.pm_id, receipt)
+            else:
+                target = {"record": args.record, "request_id": args.request_id, "task_id": args.task_id}
+                result = task_pool.complete_agy_writer(
+                    root, args.pm_id, target, args.expect_sha256, args.agent_id, revision=args.revision,
+                    verification_exit_code=args.verification_exit_code, source=args.source, evidence=args.evidence,
+                )
         elif args.command == "bind":
             receipt = records.decode(records.read_record(args.receipt))
             result = task_pool.bind(root, args.pm_id, receipt, {"host": args.host, "agent_id": args.agent_id},

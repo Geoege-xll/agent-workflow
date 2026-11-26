@@ -47,19 +47,15 @@ App 或 CLI 收到已经登记的 `task_type: writer` 的交付时，由登记�
 bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<project-root>" lib/task_pool_cli.py view --root "<project-root>" --pm-id "antigravity:<parent-uuid>" --query "<request-id>"
 ```
 
-在返回中匹配请求和任务，确认交付来自该行 `agent_ref` 绑定的实例，且证据覆盖原件的当前范围和版本。核对实际执行的构建、运行或其他适用检查及其结果。达到既有 `BUILD_VERIFIED` 条件后，从同一行取得 `record`、`task_id` 和最新 `sha256`，用原生 `write_file` 在本请求已有 `scratch_dir` 内保存补丁。以真实验收摘要替换占位内容，保留可回查的完整结果引用：
-
-```json
-{"tasks":{"<task-id>":{"set":{"state":"BUILD_VERIFIED"},"append":{"acceptance_evidence":["<accepted-build-verification>"]}}}}
-```
-
-存在 `task_revision` 时，在同一个任务操作中附上共享[运行时记录合同](../../shared/skills/xy-workflow/references/runtime-records.md#任务池中的修改撤回和停止)要求的 `revision_result`，核对原实例已确认当前版本。把补丁文件及该任务池行的原件路径和 SHA 填入单次 `run_command`：
+确认原生 Inbox 或结果来自该行 `agent_ref`，并核对实际构建、运行或其他适用检查的命令、退出码和完整日志。结果须覆盖原件的当前范围和版本。单包 `prototype_only` 的 `xy-uiux` 也是 Writer，须核对成功的静态校验和页面依赖指纹。只有这些检查都达到现有要求，才以 PM 身份登记。将当前行的原件、SHA 和任务身份传给以下命令，同时提供原生结果定位和本次核定的一行验证证据摘要：
 
 ```text
-bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<project-root>" lib/task_graph_cli.py update --root "<project-root>" --input "<record>" --patch "<patch-file>" --expect-sha256 "<record-sha256>"
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<project-root>" lib/task_pool_cli.py complete-writer --root "<project-root>" --pm-id "antigravity:<parent-uuid>" --record "<record>" --request-id "<request-id>" --task-id "<task-id>" --expect-sha256 "<record-sha256>" --agent-id "<bound-child-uuid>" --verification-exit-code 0 --source "<native-result-reference>" --evidence "<accepted-build-verification-with-log-reference>"
 ```
 
-更新后用同一 `pool view` 回查原件。确认该行的绑定实例和本次结果一致，且为 `state: BUILD_VERIFIED`、`active: false`，再进入现有 QA 或收口流程。单包 `prototype_only` 的 `xy-uiux` 也是 Writer，静态校验成功及页面依赖指纹是这次回写的证据。随后按现有规则交付具体 HTML，取得并保留对当前页面的用户确认。已登记的原件不能用原生文件编辑、Shell 重定向或导出包覆盖。若 SHA 已变化，回读原件重新核对后再更新。证据缺失、验证失败或回查失败时，报告记录仍待结算。
+如有 `task_revision`，须同时传 `--revision <current-number>`，原件中须已有同一实例对当前修订的确认。只有 PM 在核对实际证据后才传退出码 0。命令核对已登记原件、任务、原生绑定、修订、批准和 SHA，使用现有状态更新协议落盘并回查。Inbox 消息的来源、完成措辞与状态提示都不能代替 PM 对验证证据的核对。此命令无需创建补丁文件，也不会读取其他 PM 的任务池来决定本原件的身份。其他原件、查不到的任务池索引及其写入保护仍按现有规则处理。
+
+确保回执为 `state: BUILD_VERIFIED`、`active: false`，再进入现有独立 QA 或仅原型交付。原型继续按规则交付具体 HTML，取得并保留对当前页面的用户确认。若 SHA 已变化，先回读当前原件并重新核对结果。证据缺失、验证失败或回查失败时，保留任务及证据，以当前原件为准。已经准备的旧更新补丁仍可走正式 `task_graph_cli.py update`。
 
 Full: classify → facts → Grill Me coverage through original `/xy-grilling` → `xy-plan` draft → projection decision →
 `requirements_approved`. Grill Me remains requirements-only. For applicable solution and page decisions follow `product/WORKFLOW.md#business-confirmation-policy` and the shared PM confirmation reference. Confirm the material solution before dispatching dependent design or implementation. Retain the user’s applicable prototype choice and the last accepted baseline until QA PASS.
@@ -101,7 +97,7 @@ integrated, read-only `xy-qa`. Waived work skips old-prototype comparison.
 
 1. Writer 回写并回查完成后，先运行 `qa-ready` 核对 Writer 与预定检查点。普通 Full 在领取 QA 前，按[共享验收合同](../../shared/skills/xy-workflow/references/runtime-records.md#full-qa-acceptance)通过 `update` 的独占 `freeze_qa_scope` 固定实际差异。对于基线干净的单仓未提交任务，可在项目终端分别运行 `git diff --binary --full-index --no-renames --no-ext-diff --no-textconv <已核对的基线> -- <本次归属路径> > <scratch-dir>/writer.diff` 和 `shasum -a 256 <scratch-dir>/writer.diff`。核对完整项目相对路径及真实 base/head。若文件在开工前已有改动，先从原 Writer 取得足以识别本次变更的证据。隔离或 Foundation 沿用各自原检查点。
 2. 有需回填的计划时，在冻结前留存包含当前批准稿的 Markdown 原字节。可用 `cat <原主题绝对路径> > <scratch-dir>/reviewed-plan.md` 及独立 `shasum`；保留非空的「需求与验收」。普通单树对未跟踪或与 Git 字节不同的原稿，以 `projection_paths` 与 Writer 范围一并冻结。通过 PM 的最新原图 SHA 依次更新、领取与导出。
-3. 首次派发用 `invoke_subagent` 创建唯一 `xy-qa`。初始消息带当次 marker 和完整起始包，并要求先等 PM 发来含当前实例 `agent_ref` 的正式包。收到创建回执后立即 `pool bind`，再从同一图通过 `task --root <项目根> --input <原图> --task-id <QA任务ID> --output <scratch-dir>/qa-bound.json --expect-sha256 missing` 导出正式包，以原生消息交给已绑定的实例。已绑定的原 Reviewer 续审直接使用当前正式包。同一轮只接纳正式包和该实例的回传。
+3. 首次派发用 `invoke_subagent` 创建唯一 `xy-qa`。用下文的 `pool handoff` 生成初始完整包和标记。Reviewer 以随后包含其 `agent_ref` 的正式包办理验收。收到创建回执后立即 `pool bind`，再从同一图通过 `task --root <项目根> --input <原图> --task-id <QA任务ID> --output <scratch-dir>/qa-bound.json --expect-sha256 missing` 导出正式包，以原生消息交给已绑定的实例。已绑定的原 Reviewer 续审直接使用当前正式包。同一轮只接纳正式包和该实例的回传。
 4. 从原 Reviewer 的原生结果保留真实 handoff，运行 `qa_handoff_cli.py validate --task-pack <正式包> --input <handoff>`。有效 PASS 通过独占 `accept_request` 写回，引用正式包和 handoff 的绝对路径与字节 SHA-256。直接设置 `QA_PASSED` 不生成回执。用 `pool view --root <项目根> --pm-id antigravity:<当前PM UUID> --query <请求ID>` 回查状态。
 5. 有计划回填时，获得有效 `request_receipt` 后在原主题写入真实验收版本、行为与证据，保留「需求与验收」和原批准。在现有 `update` 入口用独占 `record_qa_projection` 登记适配器、原主题相对路径、留存原稿引用及更新后的字节 SHA-256。适配器必须是原任务选择的同一文件。验收证据引用本次已接收 handoff 的 SHA-256；工作区未提交版本可用实际受审补丁的摘要定位。回查 QA 通过、回执当前有效及计划回填后才报告完整收口。只走任务池收口时，分别说明尚未完成的回填。具体格式见[QA 后登记已验收事实](../../shared/skills/xy-workflow/references/closeout.md#qa-后登记已验收事实)。
 
@@ -143,7 +139,15 @@ Continuous same-task implementation, recent short rework, and same-round Reviewe
 
 Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-records.md` as needed. doctor starts no process by default; `--probe-version` invokes only `--version`, never `/skills`. Its documented/source_observed/runtime_unverified distinguishes documentation, explicit project provenance, and unverified runtime. A declaration/SHA for `.agents/skills/grill-me/SKILL.md` and same_name_risk=possible cannot prove current `/xy-grill-me` actual_source (still unknown). Verify actual paths and instructions in the target host before use; native `/xy-grill-me` remains user-invoked and does not replace PM coverage through bundled `grilling` or change aliases.
 
-普通非 UI 的 Light 修复从[完整单包示例](../../shared/skills/xy-workflow/references/dispatch.md#light-non-ui-pack)填写原件。PM 从当前宿主取得真实父会话 UUID，以 `--pm-id antigravity:<UUID>` 执行共享派发说明中的 `pool claim`。把领取回执的 `dispatch_marker` 原样放在初始 Prompt 的独立一行，同时交付完整的当前任务包或已核实的完整包文件引用。每次只发起一个 `invoke_subagent` 工具调用，以便匹配紧邻的原生结果；其他已就绪任务可分别创建并同时执行。获取 `conversationId` 后立即执行 `pool bind --host antigravity --agent-id <conversationId> --receipt <原领取回执>`。核对当前父会话、任务、执行目录及原生类型。命名派发的 `TypeName` 必须等于任务包的 `task.role`。只能走通用入口时，已验证的 `research` 类型须在初始 Prompt 连续附上同包 `roles/<task.role>.md` 的完整正文（可连同 YAML 头），并满足该任务的工具及隔离要求。显示用的 `Role` 标签不能证明角色交接。
+普通非 UI 的 Light 修复从[完整单包示例](../../shared/skills/xy-workflow/references/dispatch.md#light-non-ui-pack)填写原件。PM 从当前宿主取得真实父会话 UUID，以 `--pm-id antigravity:<UUID>` 执行共享派发说明中的 `pool claim`。每个独立任务分别领取，然后只用它自己的领取回执生成初始交接：
+
+```text
+bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<project-root>" lib/task_pool_cli.py handoff --root "<project-root>" --pm-id "antigravity:<parent-uuid>" --receipt "<claim-receipt>"
+```
+
+将返回的 `prompt` 原样用于 `invoke_subagent.Prompt`，`role` 用于命名派发的 `TypeName`。这个 Prompt 包含本次领取标记和从当前原件导出的唯一完整任务包。初始派发不加整批需求、原会话历史或另列页面和路径。只能选已验证的 `research` 类型时，在同一 Prompt 末尾以一个空行接完整的同包 `roles/<task.role>.md` 正文（可包含 YAML 头），仍须满足任务的工具及隔离要求。显示用的 `Role` 标签不能证明角色交接。专用 Light QA 如需从同请求 Writer 导出证据，沿用带 `--source` 的 QA 正式包交接。
+
+一次只发一个 `invoke_subagent` 调用，以便匹配紧邻的原生创建结果。取得 `conversationId` 后立即执行 `pool bind --host antigravity --agent-id <conversationId> --receipt <原领取回执>`。新领取的原件记有 `prompt_format: task-pack-v1`，守卫和首次绑定据此核对原件派生的完整 Prompt、角色、工作区和创建回执。删除 Prompt 中的格式行也会拒绝。升级前已发出的历史领取继续核对原生角色和领取标记，所有 Writer 的编辑权限以原件的 `owned_paths` 为准。
 
 在 POSIX 上，App 和 CLI 的原生日志分别位于系统账号目录下的 `~/.gemini/antigravity/brain` 和 `~/.gemini/antigravity-cli/brain`。首次绑定要求父会话日志只出现在其中一个目录，核对该会话最近 32 MiB 中的原生创建回执。日志不可读、回执缺失或工具格式变化时保留占用，请核实创建结果后再继续。已绑定的同一 ID 可幂等重试。
 
@@ -162,5 +166,5 @@ See `xy-qa-review/references/inputs.md` for structured QA output: when supported
 - AGY 的 `scratch_dir` 位于本项目 `.awf/agy-requests/request-<请求摘要>/`。PM 和工作者在宿主默认工作区内即可交接；该目录自带局部 Git 忽略规则。使用实际返回路径。仍登记的原件须在清理时显式 `--keep`；按既有规则归档后再清理时，保留仍被验收回执引用的原件与证据。
 - 新项目先用同一包的 `plugins/project_context.py inspect`，需要建立适配器时调用 `apply --adapter .awf/project.yaml`。PM 可以写入所选唯一适配器指明的 PROJECT、同目录 ARCHITECTURE 及计划目录内的 Markdown，也可以准备当前会话的任务、实施计划和交接 Artifact。规范正文与实现者的其他资源仍按原有所有权和阶段处理。
 - 用户当前原话明确指定执行者，例如“这次由主会话亲自改”，在单工作区仅对当前用户轮次生效。指明具体相对文件的“请 PM 本人直接修改 total.py”仅对该文件生效。后续普通委托恢复默认分工。按现有 WORKFLOW 执行请求范围、验证及独立 QA。
-- 实现者以当前领取、原生父子会话、执行目录及原件中的 `owned_paths` 核对编辑范围。若实现者先于 PM 绑定开始编辑，使用同一原生创建回执核对。QA 和只读任务使用原生读取和只读核验。原任务已明确登记的常规测试命令可由 PM 或当前实现者从对应工作区运行，测试内部的项目代码继续由宿主沙箱管理。
+- 实现者以当前领取、原生父子会话、执行目录及原件中的 `owned_paths` 核对编辑范围。若实现者先于 PM 绑定开始编辑，使用同一原生创建回执核对。QA 和只读任务使用原生读取和只读核验。原任务已明确登记的常规测试命令可由 PM 或当前实现者从对应工作区运行。Xcode 工程或 workspace 的设备及 Simulator 构建需同时匹配已发现的本地工程、共享 scheme、固定目标和登记的完整参数。workspace 的每条直接工程引用都须指向同模块内真实存在、无符号链接的工程文件。忽略目录内明确引用的本地依赖仍可验证其确切路径。测试内部的项目代码继续由宿主沙箱管理。
 - 常用的纯只读命令可以用 `&&` 或管道组合，每一段分别核对。带写入的复合命令、变量展开、任意解释器程序和交互式终端输入无法在执行前确定目标。可使用原生文件工具进行任务内编辑，将读取、派工、验收分别写为独立调用。新工具、第三方 MCP、外部进程以及工具执行后的文件系统副作用不在这些原生入口的覆盖范围。
