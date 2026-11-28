@@ -12,8 +12,10 @@
   without the implementation/QA closeout loop; actual implementation acceptance keeps its QA contract.
 - `$xy-workflow:xy-project-memory`: retrieve only needed cross-session/history facts; retain post-QA closeout.
 - Load discovered plugin Skills progressively, using their Codex-qualified names.
-  Full PM coverage loads original `$xy-workflow:xy-grilling` under xy-workflow/references/requirements-intake.md;
-  `$xy-workflow:xy-grill-me` is user-invoked only. Without a Skill tool, fully read the packaged canonical primitive;
+  Classify an explicitly delegated implementation directly as Light or Full when scope, impact and acceptance
+  are clear. Use `$xy-workflow:xy-grilling` only for a material gap in the deliverable, scope, impact or acceptance.
+  A clear Full request uses established facts for planning coverage and proceeds to `xy-plan`.
+  `$xy-workflow:xy-grill-me` is user-invoked only. When the primitive is selected and no Skill tool is available, fully read the packaged canonical primitive;
   discovery and handoff declarations do not prove loading or runtime execution.
 - Native Codex definitions can be discovered in user and project agent directories. Resolve package roles and Skills against the verified plugin. Confirm the actual native selector before applying per-role preferences.
 - Source observation for Codex `rust-v0.166.0`: enabled configuration layers load from low to high; a trusted project role definition takes precedence over the same user role name, subject to other native overrides. See [role loader](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/agent-roles/src/loader.rs) and [configuration layer priorities](https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/config/src/config_layer_source.rs). This is source-observed behavior, not proof of actual role/model execution in the current session.

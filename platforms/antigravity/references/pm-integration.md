@@ -57,12 +57,14 @@ bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/sou
 
 确保回执为 `state: BUILD_VERIFIED`、`active: false`，再进入现有独立 QA 或仅原型交付。原型继续按规则交付具体 HTML，取得并保留对当前页面的用户确认。若 SHA 已变化，先回读当前原件并重新核对结果。证据缺失、验证失败或回查失败时，保留任务及证据，以当前原件为准。已经准备的旧更新补丁仍可走正式 `task_graph_cli.py update`。
 
-Full: classify → facts → Grill Me coverage through original `/xy-grilling` → `xy-plan` draft → projection decision →
+Full: classify → record planning coverage from established facts → `xy-plan` draft → projection decision →
 `requirements_approved`. Grill Me remains requirements-only. For applicable solution and page decisions follow `product/WORKFLOW.md#business-confirmation-policy` and the shared PM confirmation reference. Confirm the material solution before dispatching dependent design or implementation. Retain the user’s applicable prototype choice and the last accepted baseline until QA PASS.
-`/xy-grill-me` is user-invoked only; use the actually discovered plugin-qualified `/xy-grilling` for PM intake.
+Classify an explicitly delegated implementation directly as Light or Full when scope, impact and acceptance
+are clear. Use the discovered plugin-qualified `/xy-grilling` only for a material gap in the deliverable, scope, impact or acceptance.
+`/xy-grill-me` is user-invoked only.
 Read xy-workflow/references/requirements-intake.md for the PM-owned schema and canonical fallback;
 declared skills paths do not prove runtime loading.
-Full work records the Grill Me coverage check and `plan_state: draft`; the pre-approval projection
+Full work records planning coverage and `plan_state: draft`; the pre-approval projection
 decision remains a draft, while post-QA controlled-document projection happens only after QA PASS.
 PM 在首次设计或实现派发前保存单一可恢复的 Full 批准稿，按计划生命周期选择稳定主题或现有持久请求交接。原型绑定配置的 `docs.plans` 内稳定原稿与当前 REQ。
 Light saves only for actual pause/recovery/handoff or user request.
@@ -137,7 +139,7 @@ Dispatch only current schema_version: 2 single-task packs: task, applicable stan
 
 Continuous same-task implementation, recent short rework, and same-round Reviewer delta checks may follow up to the original ID. After the feedback window, PM acceptance, and necessary verification/QA, first protect temporary-worktree results, unique logs, and necessary evidence, then use the currently exposed authorized native termination capability. Official kill removes temporary worktrees and prevents recovery while retaining historical transcripts; never kill before retrieving the only delivery, or claim permanent history deletion. Without native capabilities such as manage_subagents kill, or if invocation fails, only record agent_retired and prohibit continuation, with native termination unconfirmed; do not claim destruction, context clearing, or thread-capacity release. Retirement releases no still-running task locks. Observe running/open-thread counts separately under actual host definitions; under pressure reclaim accepted instances with sufficient handoff first, retain executing instances, undelivered evidence, and necessary reviewers, and reserve later necessary QA/integration capacity. resume/compact is not prepareForReuse; create no Agent pool, runner, daemon, or second state machine.
 
-Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-records.md` as needed. doctor starts no process by default; `--probe-version` invokes only `--version`, never `/skills`. Its documented/source_observed/runtime_unverified distinguishes documentation, explicit project provenance, and unverified runtime. A declaration/SHA for `.agents/skills/grill-me/SKILL.md` and same_name_risk=possible cannot prove current `/xy-grill-me` actual_source (still unknown). Verify actual paths and instructions in the target host before use; native `/xy-grill-me` remains user-invoked and does not replace PM coverage through bundled `grilling` or change aliases.
+Use doctor, usage, and continuation paths in `xy-workflow/references/runtime-records.md` as needed. doctor starts no process by default; `--probe-version` invokes only `--version`, never `/skills`. Its documented/source_observed/runtime_unverified distinguishes documentation, explicit project provenance, and unverified runtime. A declaration/SHA for `.agents/skills/grill-me/SKILL.md` and same_name_risk=possible cannot prove current `/xy-grill-me` actual_source (still unknown). Verify actual paths and instructions in the target host before use; native `/xy-grill-me` remains user-invoked and does not replace the bundled `grilling` primitive or change aliases.
 
 普通非 UI 的 Light 修复从[完整单包示例](../../shared/skills/xy-workflow/references/dispatch.md#light-non-ui-pack)填写原件。PM 从当前宿主取得真实父会话 UUID，以 `--pm-id antigravity:<UUID>` 执行共享派发说明中的 `pool claim`。每个独立任务分别领取，然后只用它自己的领取回执生成初始交接：
 

@@ -27,7 +27,7 @@ bash <plugin-root>/lib/python_runtime.sh -B -X utf8 <plugin-root>/plugins/source
 
 `check` 核对整包资源锁。`diagnose` 只读检查已有 Node >=22、浏览器与可选 ffmpeg。Impeccable 的设计方法可按需离线使用，
 选中后的全文读取见物理插件根的 `platforms/shared/skills/xy-workflow/references/skill-selection.md`。
-PM 自动通过同包 `xy-grilling` 加载原版，`xy-grill-me` 由用户显式调用。
+只有仍有影响 Light／Full 判级依据的实质缺口时，PM 才通过同包 `xy-grilling` 追问。`xy-grill-me` 由用户显式调用。
 
 同一物理插件内置 UI UX Pro Max 专题库，使用已有的 Python 标准库运行。有具体设计问题时按照上述共享规则的 `Design topic query` 调用，无需额外安装或服务。
 

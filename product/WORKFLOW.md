@@ -75,8 +75,8 @@ or stack changes, reassess routing against the installed roles and current task 
 The standard Full implementation closed loop is:
 
 ```text
-alignment and classification with on-demand auxiliary retrieval
-  -> Full: Grill Me coverage check -> xy-plan draft -> PM post-QA document projection decision
+identify the requested deliverable and authorization -> classify implementation by scope, impact and acceptance
+  -> Full: record planning coverage -> xy-plan draft -> PM post-QA document projection decision
   -> requirements approval (+ prototype choice for design-change UI) -> approved-plan/projection freeze
   -> resolve any dependent material solution decisions -> selected prototype and page confirmation if required
   -> deterministic graph validation -> path/semantic conflict check -> implementation
@@ -287,6 +287,11 @@ commit_decision:
 
 ## 4. Task Classification
 
+先确定本轮交付物。讨论、独立审查、仅原型和执行既定发行各自沿用对应入口。讨论中可按现有事实说明“若实施，预计是 Light 或 Full”及其理由；只有明确委托实施才正式判级。
+范围、实际影响和可观察的验收结果清楚时，直接判 Light 或 Full，无需加载访谈 Skill。核对影响时看实际消费者、共享契约及风险；差异行数、预计耗时和回归覆盖的宿主数不能单独决定等级。
+若现有资料不足，先在授权范围内定向核实可查事实。只有本轮交付、范围、影响或验收仍有实质缺口时，才使用同包 `xy-grilling` 追问该项，补齐后可判任一等级。即使两个选项预计都是 Full，交付目标或验收边界仍不清楚时也应澄清；已明确边界内的实现细节留到规划或实现。讨论中的答复、认可或理解确认只确定讨论内容，直到用户明确委托相应交付。
+Light 执行中若发现影响扩展到共享契约等 Full 范围，暂停受影响工作，按新事实重判并修订任务，复用仍有效的批准和证据。
+
 | Type | Definition | Workflow |
 |---|---|---|
 | Light | One delivery surface with clear scope and controlled risk, including low-risk local corrections and ordinary UI copy below | Dispatch the corresponding native implementer by default; minimum sufficient verification is mandatory, with independent-audit, documentation, and memory needs assessed at handoff; no mandatory Full plan or DAG |
@@ -350,25 +355,13 @@ A scope-bound `waived_by_user` choice retains the actual Patch/Page/Flow classif
 
 - The pack owns planning, task decomposition, parallel scheduling, implementation routing, QA,
   and closeout. External workflow Skills never replace or wrap this control plane.
-- Every `Full` request runs a **Grill Me coverage check** owned by the PM before planning,
-  using the bundled upstream `grilling` primitive through `xy-grilling`. `xy-grill-me` remains user-invoked only.
-  Read `platforms/shared/skills/xy-workflow/references/requirements-intake.md`
-  for the complete invocation and internal coverage contract. The PM first retrieves only auxiliary project facts
-  that are materially needed for coverage; no document or memory retrieval is required when
-  available information is already sufficient. If the facts answer every material question, Grill
-  Me returns immediately without manufacturing questions; otherwise it conducts the smallest
-  necessary interview. Clear Light work does not invoke it merely because the Skill is
-  installed.
-- If the bundled `grilling` primitive is unavailable, run the focused local clarification fallback below and record
-  `grill_fallback` in the request record. Absence alone does not authorize another external planning
-  or orchestration workflow and does not block safe, already-clear Light work.
-- The fallback must inspect only any task-relevant project facts needed to resolve a material gap,
-  then use a compact set of questions to confirm
-  observable goals, scope and non-goals, precedence among conflicting constraints, acceptance
-  evidence, and approval/rollback boundaries. Unresolved questions that would materially change
-  implementation or authorize irreversible actions must wait for the user. Otherwise, record the
-  minimum safe assumptions and `unresolved_questions`.
-- Light requests that are clear and conflict-free do not require `$xy-grilling`.
+- For Full planning coverage, the PM records established facts directly in the internal
+  `grill_result` defined in `platforms/shared/skills/xy-workflow/references/requirements-intake.md`.
+  A clear Full request proceeds to `xy-plan` without loading an interview Skill. Decisions
+  about a material solution or a prototype follow their existing confirmation stages.
+- Use the bundled `xy-grilling` only for a material gap in the deliverable, scope, impact or acceptance.
+  If it is unavailable, use the focused clarification fallback in the intake reference.
+  Resolve the same gap, then classify from the answer. `xy-grill-me` remains user-invoked only.
 - PM 分别判断执行等级和长期文档归属。Light 按实际暂停、恢复、交接或明确要求保存。Full 在批准后、首次设计或实现派发前保存一份可恢复的批准原稿。已有业务主题原位更新，独立新能力或跨主题决定才建新页。纯执行、纯符合性修复可将批准稿保存在已有、可跨会话取回的请求交接位置，保留批准与证据，避免任务清理使其失效；无需增加业务 plans。项目特有规范和具体交互各归现有规范叶子与原型。
   原型需要绑定需求来源时，使用适配器 `docs.plans` 内范围匹配的稳定批准原稿和有效 REQ，优先复用现有主题，继续履行原型选择、校验和视觉确认。明确的任务级豁免和保存指示仍适用。执行细节见[计划生命周期](../platforms/shared/skills/xy-workflow/references/plan-lifecycle.md)。
   PM 在同一需求主题按需维护目标、规则、技术方案和已批准原型的链接；区分已确认意向、交付进度与已验证实现。实现后依据实际代码、测试和验收补记实施事实、维护入口。Light 修复和纯讨论沿用原有文档归属，不为此次确认另建文件。写法见 [xy-plan 需求 Markdown](../platforms/shared/skills/xy-plan/references/requirements-markdown.md)。
@@ -400,7 +393,7 @@ QA remains statically bound only to `xy-qa-review`, reading the relevant method 
 
 ```yaml
 external_workflow_policy:
-  requirements_provider: xy-grilling
+  requirements_provider: xy-grilling  # only for material gaps in the classification inputs
   planning_provider: xy-plan
   planning_methodology: superpowers-writing-plans-adapted
   superpowers_default: disabled
@@ -425,10 +418,9 @@ read-only QA remain under their existing owners; loading a tool grants none of t
 
 ### Native Bug-Fix Route
 
-Clear, reproducible Light bugs use `native_bug_fix` without Grill Me. A `Full` bug still
-runs the Grill Me coverage check and `xy-plan`; when symptom, expected result, environment,
-reproduction, impact, and acceptance evidence are already complete, the coverage check asks no
-questions. Receiving review feedback is not bug diagnosis and does not select an external workflow.
+Clear, reproducible Light bugs use `native_bug_fix` without Grill Me. A clear Full bug proceeds
+to `xy-plan` using the known symptom, expected result, environment, reproduction, impact and
+acceptance evidence. Receiving review feedback is not bug diagnosis and does not select an external workflow.
 
 ```yaml
 native_bug_fix:
@@ -460,7 +452,7 @@ business_confirmation_policy:
   additional_gates: exceptional
 ```
 
-- **需求确认**（`requirements_approved`）明确做什么、影响哪些范围、关键约束和如何验收。用户已明确授权同一请求的当前范围时，PM 复用该依据。Full 按既有要求完成 Grill Me、审阅草案并冻结批准原稿。设计有变化时说明原型建议，记录用户已选的 `required` 或 `waived_by_user`；尚未选择时只问这个问题。
+- **需求确认**（`requirements_approved`）明确做什么、影响哪些范围、关键约束和如何验收。用户已明确授权同一请求的当前范围时，PM 复用该依据。Full 按既有要求核对规划所需事实、审阅草案并冻结批准原稿。设计有变化时说明原型建议，记录用户已选的 `required` 或 `waived_by_user`；尚未选择时只问这个问题。
 - **方案确认**（`solution_approved`）解决会改变结果、且无法从现有要求、规范或设计权威确定的业务规则、交互与异常处理、技术取舍。PM 负责提出并向用户统一呈现方案，说明需要选什么、建议及后果。简单问题由 PM 直接给出建议；已获 Full 实施委托且需核实专业事实时，按[只读咨询派发](../platforms/shared/skills/xy-workflow/references/dispatch.md#read-only-design-consultation)请相关角色给出事实及选项，例如后端核查数据兼容性，设计者核查交互状态。PM 综合后给出推荐，由用户作出决定。咨询不授权原型或生产写入，独立 QA 仍按原阶段执行。用户可以直接给出决定，也可以明确接受简报中的建议。沿用既定规则、已确认的方案或可安全自行决定的实现细节时，不增设确认。对尚未批准的实质决定，可以继续讨论和只读取证；依赖该决定的原型和生产任务均须等待。每项决定按当前请求、事项和内容绑定，在既有 `approved_gates` 中记录。任务字段及门值格式见 [AGENT_SCHEMA](AGENT_SCHEMA.md#scheduling-fields-machine-readable-task-pack-contract)。
 - **原型确认**（`visual_approved`）适用于用户选择制作原型的设计。PM 先按既有流程完成 `prototype_verified`、`visual_review_ready`，再请用户确认具体页面、交互范围和已验证的页面依赖指纹。仅当依赖该页的生产工作已获委托，才放行相应生产任务。只委托原型时，当前页面验收后即交付。
 - Full 新 UI 的顺序为需求范围、适用的方案决定、所选原型。用户明确批准同一份简报中的需求范围和具体方案时可一次记录两者，逐项说明有歧义或尚待选择的内容；确认做原型只选择交付分支。批准需求、看过讨论、同意直接开发或跳过视觉，均不能替用户决定仍然开放的方案。按现有原型修正、非 UI、直接开发也各自检查有无实质未决方案；无设计变更或已选择直接开发时省去页面视觉确认。
@@ -521,7 +513,7 @@ freeze time. For `prototype_contract`, it is the verified page dependency finger
 fingerprint-less reference is not design authority.
 
 A valid `UI-Conformance` request does not dispatch an `xy-uiux` Writer, does not run a prototype mutation
-phase, and does not require `visual_approved`. Except for the ordinary low-risk Light copy explicitly defined above, UI-Conformance remains Full: retain complete Grill Me, xy-plan, requirements_approved, build verification, and exactly one integrated read-only QA. Light copy uses the same current resolved authority and engineering/design constraints without inheriting Full planning, duplicate confirmation, or mandatory QA; every design/interaction change is Full. Its implementation task carries `audit_surfaces: [ui, accessibility]` as
+phase, and does not require `visual_approved`. Except for the ordinary low-risk Light copy explicitly defined above, UI-Conformance remains Full: retain Full planning coverage, xy-plan, requirements_approved, build verification, and exactly one integrated read-only QA. Light copy uses the same current resolved authority and engineering/design constraints without inheriting Full planning, duplicate confirmation, or mandatory QA; every design/interaction change is Full. Its implementation task carries `audit_surfaces: [ui, accessibility]` as
 applicable and QA verifies both regression behavior and conformance with `design_authority_refs`.
 
 If the authority is missing, stale, contradictory, incomplete, or the implementation exposes any
@@ -1180,7 +1172,7 @@ native usage and provenance diagnostics under `continuous-pm-intake`; use `xy-qa
 and the current host pm-integration for structured QA schema/extract. An ID proves neither liveness, role,
 approval nor completion. Diagnostics distinguish documented/source_observed/runtime_unverified; do not sum
 native cumulative usage per record, replace unknown with zero, or calculate cost/savings rates. Verify AGY
-native grill-me provenance and its user-invoked boundary rather than replacing the PM's grilling coverage check; human diff/Artifact review is
+native grill-me provenance and its user-invoked boundary and the PM’s use of the bundled primitive for material gaps in the classification inputs; human diff/Artifact review is
 not independent AI QA. This adds no gates to ordinary read-only/Light work or automatic native/boost/teamwork.
 
 Effective dispatch capacity is the minimum of configured remaining subagent slots, configured

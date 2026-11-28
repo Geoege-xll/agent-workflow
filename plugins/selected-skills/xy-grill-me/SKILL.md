@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Grill Me 用户显式入口（本项目薄适配）
 
-仅当前用户直接点名此入口才可调用。安装批准、其它Skill建议、PM自动接单或Worker转述不算用户显式调用；自动需求覆盖入口是同一物理插件中的 xy-grilling。
+仅当前用户直接点名此入口才可调用。安装批准、其它Skill建议、PM自动接单或Worker转述不算用户显式调用；PM 处理判级缺口时按需使用同一物理插件中的 xy-grilling。
 
 安装包在下方直接提供已按锁校验的完整原文。源码开发时，原文位于 `third_party/selected-skills/grill-me/skills/productivity/grill-me/SKILL.md`。仅阅读此技能无需运行命令。
 

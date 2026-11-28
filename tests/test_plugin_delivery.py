@@ -252,6 +252,7 @@ class PluginDeliveryTest(unittest.TestCase):
                     self.assertNotIn(b"model:", header)
                     self.assertNotIn(b"tools:", header)
                     self.assertNotIn(b"permissionMode:", header)
+                    self.assertNotIn(b"skills:", header)
 
     def test_codex_preparation_templates_are_complete_non_discovered_and_digest_bound(self):
         # 检查真实 ZIP 解包产物：生成资源不能冒充宿主发现条目，每份 TOML
@@ -337,6 +338,7 @@ class PluginDeliveryTest(unittest.TestCase):
         output = json.loads(result.stdout)["hookSpecificOutput"]
         self.assertEqual("SessionStart", output["hookEventName"])
         self.assertIn(str(root / "skills/xy-workflow/SKILL.md"), output["additionalContext"])
+        self.assertIn("only for a material gap in the deliverable, scope, impact or acceptance", output["additionalContext"])
         self.assertNotIn("requirements_approved", output["additionalContext"])
         self.assertFalse((self.root / "hook-home").exists())
         self.assertTrue(metadata["hook_trust_required"])
