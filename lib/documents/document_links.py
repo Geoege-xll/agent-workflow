@@ -191,8 +191,9 @@ def _projection_references(body):
                 yield number, link, None
 
 
-def projection_link_errors(root: Path, documents: dict[Path, tuple[str, str]], digest_file) -> list[str]:
-    """检查前后像的链接增量、直接引用的 Markdown 和显式绑定文件的摘要。"""
+def projection_link_errors(root: Path, documents: dict[Path, tuple[str, str]], digest_file, *,
+                           acceptance_lines: dict[Path, tuple[int | None, int]]) -> list[str]:
+    """检查验收行采用的全部引用、其他增量及直接 Markdown 证据；保留旧验收引用的去向。"""
     targets = set()
     errors = []
     read_anchors = lru_cache(maxsize=32)(target_anchors)
@@ -209,18 +210,29 @@ def projection_link_errors(root: Path, documents: dict[Path, tuple[str, str]], d
         if has_path and target.suffix.lower() == ".md" and target.is_file() and target not in documents:
             targets.add(target)
 
-    def key(link, claimed_sha):
-        return link.raw, link.label, claimed_sha
-
     for source, (before, after) in documents.items():
-        previous = Counter(key(link, sha) for _, link, sha in _projection_references(before))
+        old_line, new_line = acceptance_lines.get(source, (None, None))
+        old_statement = before.splitlines()[old_line - 1] if old_line is not None else None
+        after_lines = after.splitlines()
+        previous = Counter()
+        historical_targets = set()
+        for number, link, sha in _projection_references(before):
+            previous[(link.raw, link.label, sha)] += 1
+            if number == old_line:
+                historical_targets.add(link.raw)
         current = []
         for number, link, sha in _projection_references(after):
-            identity = key(link, sha)
+            identity = (link.raw, link.label, sha)
+            # 本轮验收行即使沿用原链接也须验证实际文件；其它行只查增量，以保留历史快照。
+            if number == new_line or not previous[identity]:
+                current.append((number, link, sha))
             if previous[identity]:
                 previous[identity] -= 1
-            else:
-                current.append((number, link, sha))
+            # 正文中的同名导航不能掩盖历史验收依据的删除。证据保留在当前栏或原样保全的旧行。
+            if number == new_line or after_lines[number - 1] == old_statement:
+                historical_targets.discard(link.raw)
+        for missing in sorted(historical_targets):
+            errors.append(f"{source.relative_to(root)}:{old_line}: 旧验收证据链接须保留可恢复的引用：{missing!r}")
         errors.extend(_check_links(root, source, after, read_anchors, current, on_target=collect_target))
     for target in sorted(targets):
         try:

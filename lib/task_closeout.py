@@ -22,6 +22,17 @@ def request_tasks(snapshots, request_id):
     )
 
 
+def full_qa_blocker(root, graph, qa):
+    if not current_request_receipt(graph, qa, root=root):
+        return "current_request_qa_receipt_required"
+    # 原 QA 可先通过。收口和归档都须等冻结时选定的原文档完成有效投影。
+    selected = qa.get("qa_projection_baselines", {})
+    projected = {entry["path"] for entry in qa.get("qa_projection", {}).get("documents", [])}
+    if not projected.issuperset(selected):
+        return "required_plan_projection_pending"
+    return None
+
+
 def accepted(root, rows):
     if not rows:
         return "request_not_registered"
@@ -42,14 +53,8 @@ def accepted(root, rows):
         graph, qa = reviewers[0]
         if qa["state"] != "QA_PASSED" or not qa.get("agent_ref"):
             return "unique_request_qa_required"
-        if full and not current_request_receipt(graph.source, qa, root=root):
-            return "current_request_qa_receipt_required"
-        # 原 QA 回执先独立通过。只有收口核对 PM 在冻结范围时明确选定的原文档，
-        # 避免把验收后才能登记的回填变成 QA 或回填本身的前置条件。
-        selected = qa.get("qa_projection_baselines", {})
-        projected = {entry["path"] for entry in qa.get("qa_projection", {}).get("documents", [])}
-        if full and not projected.issuperset(selected):
-            return "required_plan_projection_pending"
+        if full:
+            return full_qa_blocker(root, graph.source, qa)
     return None
 
 

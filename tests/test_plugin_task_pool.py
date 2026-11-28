@@ -289,20 +289,25 @@ class PackagedTaskPoolTest(unittest.TestCase):
         body = reviewed.read_text().replace("已验收版本: `none`", "已验收版本: `v1`")
         heading = "## 验收结果与当前已交付行为\n\n"
         body = body.replace(heading + body.split(heading)[1].split("\n")[0], heading + "已独立验证。")
-        plan.write_text(body + "\n## 批准依据与必要证据\n\n- 批准依据: requirements_approved@" + "a" * 64 +
-                        "\n- 验收证据: " + refs["handoff"]["sha256"] + " [本轮证据](../current.md)\n")
+        projected = (body + "\n## 批准依据与必要证据\n\n- 批准依据: requirements_approved@" + "a" * 64 +
+                     "\n- 验收证据: " + refs["handoff"]["sha256"] + " [本轮证据](../current.md)\n")
 
         artifact = self.project / "docs/result.bin"
         artifact.write_bytes(b"current\xff")
         proof = self.project / "docs/current.md"
         entry = {"path": name, "reviewed": {"path": str(reviewed), "sha256": digest(reviewed)},
-                 "projected_sha256": digest(plan)}
+                 "projected_sha256": hashlib.sha256(projected.encode()).hexdigest()}
         operation = {"record_qa_projection": {"adapter": "project.yaml", "documents": [entry]}}
         for host in self.plugins:
             with self.subTest(host=host):
                 record = self.workspace / f"{host}-projection.json"
                 record.write_text(json.dumps(accepted))
+                plan.write_bytes(reviewed.read_bytes())
+                self.pool(host, "register", "--record", record, "--expect-sha256", digest(record))
                 original = record.read_bytes()
+                pending = self.pool(host, "archive", "--record", record, "--expect-sha256", digest(record), code=2)
+                self.assertEqual("required_plan_projection_pending", pending["error"])
+                plan.write_text(projected)
                 row = {"task_id": "qa", "record": record, "sha256": digest(record)}
                 proof.write_text("[结果](result.bin) SHA256=" + "0" * 64 + "\n")
                 self.assertIn("SHA256 与链接文件的实际字节不符", self.update(host, row, operation, code=2)["error"])
@@ -311,6 +316,8 @@ class PackagedTaskPoolTest(unittest.TestCase):
                 self.update(host, row, operation)
                 qa = next(task for task in json.loads(record.read_bytes())["tasks"] if task["id"] == "qa")
                 self.assertEqual(entry, qa["qa_projection"]["documents"][0])
+                archived = self.pool(host, "archive", "--record", record, "--expect-sha256", digest(record))
+                self.assertEqual("archived", archived["status"])
 
     def test_codex_prototype_only_single_packs_are_claimed_and_bound_before_handoff(self):
         from tests.test_plugin_workflow_contract import visual_request
