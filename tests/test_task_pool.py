@@ -184,6 +184,62 @@ class TaskPoolTest(unittest.TestCase):
             self.assertFalse(sibling.exists())
         self.assertEqual(b"recorded bytes", evidence.read_bytes())
 
+    def test_cleanup_preserves_multiple_references_through_short_temp_paths(self):
+        from lib.task_closeout import keep_scratch, relative_under, verify_evidence
+
+        # macOS 对两种系统临时根均有真实的不同深度别名。其他环境用临时目录的
+        # 父链接验证文本引用；结构化原件、回执的无链接读取合同保持不变。
+        bases = (self.work, Path("/private/tmp")) if sys.platform == "darwin" else (self.work,)
+        for number, base in enumerate(bases):
+            with self.subTest(base=base), tempfile.TemporaryDirectory(dir=base) as directory:
+                self.env["TMPDIR"] = directory
+                request = f"short-path-{number}"
+                folder = Path(self.graph_call("scratch", "--request-id", request)["scratch_dir"])
+                if sys.platform == "darwin" and folder.is_relative_to("/private"):
+                    alias = Path("/") / folder.relative_to("/private")
+                else:
+                    parent = self.work / "aliases" / f"root-{number}"
+                    parent.parent.mkdir(exist_ok=True)
+                    parent.symlink_to(directory, target_is_directory=True)
+                    alias = parent / folder.relative_to(directory)
+                self.assertTrue(alias.samefile(folder))
+                if alias.with_name(alias.name.upper()).is_dir():
+                    alias = alias.with_name(alias.name.upper())
+                prefix = f"{alias.parent}/./{alias.name}/"
+                files = {"First proof.log": b"first", "second.log": b"second", "third.log": b"third"}
+                for name, body in files.items():
+                    (folder / name).write_bytes(body)
+                discard = folder / "discard.tmp"
+                discard.write_bytes(b"unreferenced fixture")
+                external = Path(directory) / "external" / folder.name
+                external.mkdir(parents=True)
+                outside = external / "unrelated.log"
+                outside.write_bytes(b"separate slot")
+                owner = self.record(f"source-{number}", state="BUILD_VERIFIED")
+                source = json.loads(owner.read_bytes())
+                source["task"]["acceptance_evidence"] = [
+                    f"`{prefix}./First proof.log` and `{outside}`; logs {prefix}second.log {prefix}third.log"
+                ]
+                self.write(owner, source)
+                self.reg(owner)
+                command = ("cleanup-scratch", "--request-id", request)
+                self.assertIn("referenced", self.graph_call(*command, "--dry-run", code=2)["error"])
+                self.reg(self.record(request, state="BUILD_VERIFIED"))
+                self.assertEqual(Path("second.log"), relative_under(alias / "second.log", folder))
+                with self.assertRaisesRegex(ValueError, "registered task original"):
+                    task_pool.require_registered_scratch_keeps(folder, (), (alias / "second.log",))
+                with self.assertRaisesRegex(ValueError, "cannot prove"):
+                    keep_scratch(folder, [(owner, {"text": f"`{prefix}second.log missing`"})], ())
+                with self.assertRaisesRegex(ValueError, "symlink"):
+                    verify_evidence({"path": str(alias / "second.log"), "sha256": self.sha(folder / "second.log")})
+                preview = self.graph_call(*command, "--pm-id", self.pm, "--dry-run")
+                self.assertEqual(sorted(files), preview["kept_files"])
+                self.assertEqual(["discard.tmp"], preview["candidate_sample"])
+                self.graph_call(*command, "--pm-id", self.pm, "--expect-sha256", preview["snapshot_sha256"])
+                self.assertFalse(discard.exists())
+                self.assertEqual(files, {path.name: path.read_bytes() for path in folder.iterdir()})
+                self.assertEqual(b"separate slot", outside.read_bytes())
+
     def test_two_full_closeouts_preserve_current_qa_contract_and_allow_cleanup(self):
         from lib.foundation_qa import current_request_receipt
         from lib.solution_confirmation import bind_decisions, decision_gates

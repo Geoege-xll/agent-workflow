@@ -1,6 +1,7 @@
 """Project post-acceptance actions from existing authoritative task records."""
 
 from pathlib import Path
+import os
 import re
 
 from lib import task_graph_records as records
@@ -77,17 +78,21 @@ def verify_evidence(item):
 
 def relative_under(path, directory):
     """按祖先目录的物理身份判定归属，返回相对拼写供后续快照逐项核对。"""
-    depth = len(directory.parts)
-    if len(path.parts) < depth:
+    if path.parts[:len(directory.parts)] == directory.parts:
+        return path.relative_to(directory)
+    try:
+        scope = directory.stat()
+    except FileNotFoundError:
         return None
-    ancestor = Path(*path.parts[:depth])
-    if str(ancestor) != str(directory):
+    # /var 和 /private/var 的层数不同。仅比对祖先身份，保留槽内的原相对名称，
+    # 让下游快照继续拒绝链接；不能 resolve 整个叶路径后跳过槽内的链接检查。
+    for ancestor in (path, *path.parents):
         try:
-            if not ancestor.samefile(directory):
-                return None
+            if os.path.samestat(scope, ancestor.stat()):
+                return path.relative_to(ancestor)
         except (FileNotFoundError, NotADirectoryError):
-            return None
-    return path.relative_to(ancestor)
+            continue
+    return None
 
 
 def preservation(path, rows):
@@ -206,31 +211,56 @@ def _preserved_references(source):
     return texts
 
 
+def _text_scratch_paths(text, slot, target):
+    """枚举同一文本的各个定位。先识别槽名，再由实际目录确认该绝对路径的起点。"""
+    locations = []
+    previous = 0
+    for marker in slot.finditer(text):
+        # 一个未加引号的路径可以包含空格；先取最长真实目录，避免把另一目录
+        # 的路径后缀当作本槽。相邻的命令参数、反引号或括号可以各自开始新定位。
+        roots = re.finditer(r"(?<![\w./-])/", text[previous:marker.end()])
+        for root in roots:
+            start = previous + root.start()
+            location = Path(text[start:marker.end() - 1])
+            if location.is_dir():
+                locations.append((start, marker.end(), location))
+                break
+        else:
+            raise TaskGraphError("cannot prove a referenced scratch path is preserved")
+        previous = marker.end()
+    for index, (start, end, location) in enumerate(locations):
+        if relative_under(location, target) != Path("."):
+            continue
+        limit = locations[index + 1][0] if index + 1 < len(locations) else len(text)
+        suffix = text[end:limit]
+        # 独立值和带引号的值可包含空格及标点。普通文字的终止符沿用已有合同；
+        # 多个未加引号的定位之间可能夹有说明，按真实文件判断其结束位置。
+        quote = text[start - 1] if start else ""
+        quoted = quote in ('"', "'", "`")
+        if quoted:
+            suffix = suffix.partition(quote)[0]
+        elif not (start == 0 and limit == len(text) and Path(text).is_file()):
+            suffix = re.split(r'[\n\r"\x27\x60<>;)#]', suffix, maxsplit=1)[0].rstrip()
+        candidate = Path(suffix)
+        if not (target / candidate).is_file():
+            if quoted or limit == len(text):
+                raise TaskGraphError("cannot prove a referenced scratch path is preserved")
+            matches = {Path(suffix[:separator.start()]) for separator in re.finditer(r"[\s,|，；、]+", suffix)
+                       if (target / suffix[:separator.start()]).is_file()}
+            if len(matches) != 1:
+                raise TaskGraphError("cannot prove a referenced scratch path is preserved")
+            candidate, = matches
+        yield candidate.as_posix()
+
+
 def keep_scratch(target, originals, keeps):
     """保留全部登记原件和能从原记录解析的显式证据定位；模糊路径拒绝清理。"""
     keep = set(keeps)
-    # 以请求槽名和祖先层数定位原文中的绝对路径，实际归属再比较目录身份。
-    # 只用忽略大小写的整路径比较会在敏感卷上混入另一个槽，也会漏掉 Unicode 拼写。
-    prefix = re.compile(r"/(?:[^/\n\r]+/){%d}%s/" % (len(target.parts) - 2, re.escape(target.name)),
-                        re.IGNORECASE)
+    slot = re.compile("/" + re.escape(target.name) + "/", re.IGNORECASE)
     for path, source in originals:
         relative = relative_under(path, target)
         if relative is not None:
             keep.add(relative.as_posix())
         for item in _preserved_references(source):
-            for match in prefix.finditer(item):
-                location = Path(match.group())
-                suffix = item[match.end():]
-                if relative_under(location, target) is None:
-                    continue
-                if match.start() == 0 and Path(item).is_file():
-                    keep.add(suffix)
-                    break
-                name = re.match(r'[^\n\r"\x27\x60<>;)#]+', suffix)
-                if not name:
-                    continue
-                candidate = name[0].strip()
-                if not (target / candidate).is_file():
-                    raise TaskGraphError("cannot prove a referenced scratch path is preserved")
-                keep.add(candidate)
+            keep.update(_text_scratch_paths(item, slot, target))
     return tuple(sorted(keep))
