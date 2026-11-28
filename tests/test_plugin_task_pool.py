@@ -265,6 +265,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertFalse(unused.exists())
 
     def test_packaged_projection_checks_evidence_bytes_on_every_host(self):
+        from base64 import b64decode
         from tests.test_foundation_qa import FoundationQATest
 
         candidate = FoundationQATest()
@@ -278,41 +279,74 @@ class PackagedTaskPoolTest(unittest.TestCase):
         reviewed = self.workspace / "reviewed.md"
         reviewed.write_bytes((PACK / "templates/docs/PLAN.md").read_bytes())
         plan.write_bytes(reviewed.read_bytes())
+        appendix_name = "docs/plans/attachments.md"
+        appendix = self.project / appendix_name
+        reviewed_appendix = self.workspace / "reviewed-attachments.md"
+        # 同批主题中已有的链接在它被用作本轮直接证据时也应验证。再下一层仍是普通定位。
+        reviewed_appendix.write_text(reviewed.read_text().replace("stable-topic-id", "attachments")
+                                     + "\n[附件](../attachment.bin) [背景](../background.md)\n")
+        appendix.write_bytes(reviewed_appendix.read_bytes())
+        (self.project / "docs/background.md").write_text("[历史背景](retired.md)\n")
         source = candidate.ordinary_source()
         source["requirements_fingerprint"] = "a" * 64
         frozen = candidate.freeze(source)
         frozen = candidate.update(frozen, "qa", {"freeze_qa_scope": {
-            "scope_ref": frozen["tasks"][2]["qa_scope_ref"], "projection_paths": [name]}})
+            "scope_ref": frozen["tasks"][2]["qa_scope_ref"], "projection_paths": [name, appendix_name]}})
         active = candidate.start(frozen)
         _, _, refs = candidate.evidence(active, "package")
         accepted = candidate.update(active, "qa", {"accept_request": refs})
-        body = reviewed.read_text().replace("已验收版本: `none`", "已验收版本: `v1`")
-        heading = "## 验收结果与当前已交付行为\n\n"
-        body = body.replace(heading + body.split(heading)[1].split("\n")[0], heading + "已独立验证。")
-        projected = (body + "\n## 批准依据与必要证据\n\n- 批准依据: requirements_approved@" + "a" * 64 +
-                     "\n- 验收证据: " + refs["handoff"]["sha256"] + " [本轮证据](../current.md)\n")
 
-        artifact = self.project / "docs/result.bin"
-        artifact.write_bytes(b"current\xff")
+        def approved(before, evidence=""):
+            body = before.replace("已验收版本: `none`", "已验收版本: `v1`")
+            heading = "## 验收结果与当前已交付行为\n\n"
+            body = body.replace(heading + body.split(heading)[1].split("\n")[0], heading + "已独立验证。")
+            return (body + "\n## 批准依据与必要证据\n\n- 批准依据: requirements_approved@" + "a" * 64 +
+                    "\n- 验收证据: " + refs["handoff"]["sha256"] + evidence + "\n")
+
+        projected = approved(reviewed.read_text(), " [本轮证据](../current.md) [附件清单](attachments.md)")
+        projected_appendix = approved(reviewed_appendix.read_text())
+        attachment = self.project / "docs/attachment.bin"
+        artifact = self.project / "docs/capture.png"
+        artifact.write_bytes(b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+                                       "/x8AAwMCAO+jOqQAAAAASUVORK5CYII="))
         proof = self.project / "docs/current.md"
         entry = {"path": name, "reviewed": {"path": str(reviewed), "sha256": digest(reviewed)},
                  "projected_sha256": hashlib.sha256(projected.encode()).hexdigest()}
-        operation = {"record_qa_projection": {"adapter": "project.yaml", "documents": [entry]}}
+        appendix_entry = {"path": appendix_name, "reviewed": {
+            "path": str(reviewed_appendix), "sha256": digest(reviewed_appendix)},
+            "projected_sha256": hashlib.sha256(projected_appendix.encode()).hexdigest()}
+        operation = {"record_qa_projection": {"adapter": "project.yaml", "documents": [entry, appendix_entry]}}
         for host in self.plugins:
             with self.subTest(host=host):
                 record = self.workspace / f"{host}-projection.json"
                 record.write_text(json.dumps(accepted))
                 plan.write_bytes(reviewed.read_bytes())
+                appendix.write_bytes(reviewed_appendix.read_bytes())
                 self.pool(host, "register", "--record", record, "--expect-sha256", digest(record))
                 original = record.read_bytes()
                 pending = self.pool(host, "archive", "--record", record, "--expect-sha256", digest(record), code=2)
                 self.assertEqual("required_plan_projection_pending", pending["error"])
                 plan.write_text(projected)
+                appendix.write_text(projected_appendix)
                 row = {"task_id": "qa", "record": record, "sha256": digest(record)}
-                proof.write_text("[结果](result.bin) SHA256=" + "0" * 64 + "\n")
-                self.assertIn("SHA256 与链接文件的实际字节不符", self.update(host, row, operation, code=2)["error"])
+                attachment.write_bytes(b"attachment")
+                for declaration, error in (
+                    ("[结果](capture.png) SHA256=" + "0" * 64, "SHA256 与链接文件的实际字节不符"),
+                    ("![图片](capture.png) SHA256=" + "0" * 64, "SHA256 与链接文件的实际字节不符"),
+                    ("![图片][证物] SHA256=" + "0" * 64 + "\n\n[证物]: capture.png", "SHA256 与链接文件的实际字节不符"),
+                    ("![图片][证物]\n\n[证物]: missing.png", "目标不存在"),
+                ):
+                    proof.write_text(declaration + "\n")
+                    self.assertIn(error, self.update(host, row, operation, code=2)["error"])
+                    self.assertEqual(original, record.read_bytes())
+                proof.write_text(f"![图片](capture.png) SHA256={digest(artifact)}\n"
+                                 f"![引用图片][证物] SHA256={digest(artifact)}\n\n[证物]: capture.png\n"
+                                 "`![示例](not-an-image.png)`\n")
+                attachment.unlink()
+                broken = self.update(host, row, operation, code=2)
+                self.assertRegex(broken["error"], r"attachments\.md:\d+: 目标不存在：'\.\./attachment\.bin'")
                 self.assertEqual(original, record.read_bytes())
-                proof.write_text("[结果](result.bin) SHA256=" + digest(artifact) + "\n")
+                attachment.write_bytes(b"attachment")
                 self.update(host, row, operation)
                 qa = next(task for task in json.loads(record.read_bytes())["tasks"] if task["id"] == "qa")
                 self.assertEqual(entry, qa["qa_projection"]["documents"][0])

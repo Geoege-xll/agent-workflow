@@ -13,7 +13,7 @@ from typing import Iterable, Iterator
 from urllib.parse import unquote, urlsplit
 
 from lib.documents.markdown_headings import iter_visible_lines, markdown_anchors, visible_markdown_lines
-from lib.documents.markdown_links import document_links, line_links, prose_lines, without_html_blocks
+from lib.documents.markdown_links import document_links, prose_lines, without_html_blocks
 from lib.documents.safe_documents import snapshot
 
 
@@ -180,15 +180,11 @@ def body_link_errors(root, source, body, read_anchors, *, html_only=False):
 
 def _projection_references(body):
     lines = list(document_prose(body))
-    for number, link in document_links(lines):
+    for number, link in document_links(lines, include_images=True):
         # 只有紧接真实链接的标记才声明文件摘要。Markdown 示例、单独的历史摘要
         # 及 QA handoff 摘要不属于文件声明。
         claim = _FILE_SHA.match(lines[number - 1], link.end)
         yield number, link, claim[1] if claim else None
-    for number, line in enumerate(lines, 1):
-        for link in line_links(line, include_images=True):
-            if line[link.start] == "!":
-                yield number, link, None
 
 
 def projection_link_errors(root: Path, documents: dict[Path, tuple[str, str]], digest_file, *,
@@ -207,7 +203,7 @@ def projection_link_errors(root: Path, documents: dict[Path, tuple[str, str]], d
 
     def collect_target(target, claimed_sha, has_path):
         check_target(target, claimed_sha, has_path)
-        if has_path and target.suffix.lower() == ".md" and target.is_file() and target not in documents:
+        if has_path and target.suffix.lower() == ".md" and target.is_file():
             targets.add(target)
 
     for source, (before, after) in documents.items():
@@ -233,11 +229,17 @@ def projection_link_errors(root: Path, documents: dict[Path, tuple[str, str]], d
                 historical_targets.discard(link.raw)
         for missing in sorted(historical_targets):
             errors.append(f"{source.relative_to(root)}:{old_line}: 旧验收证据链接须保留可恢复的引用：{missing!r}")
-        errors.extend(_check_links(root, source, after, read_anchors, current, on_target=collect_target))
+        # 主题新增或采用的材料是直接证据。索引只允许追加已核实主题的导航，
+        # 不能因这条导航把该主题所有不参与本轮的历史引用升级为当前证据。
+        on_target = collect_target if source in acceptance_lines else check_target
+        errors.extend(_check_links(root, source, after, read_anchors, current, on_target=on_target))
     for target in sorted(targets):
         try:
-            data, _ = snapshot(target)
-            body = data.decode("utf-8")
+            if target in documents:
+                body = documents[target][1]  # 复用同批已经核对过字节摘要的后像。
+            else:
+                data, _ = snapshot(target)
+                body = data.decode("utf-8")
             errors.extend(_check_links(root, target, body, read_anchors, _projection_references(body),
                                        on_target=check_target))
         except (OSError, ValueError) as exc:
