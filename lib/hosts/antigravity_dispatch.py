@@ -22,6 +22,7 @@ from lib.task_graph import TaskGraphError
 # Created/Completed 是宿主附加的时间行；命令输出和聊天的相同文字不能作为回执。
 _MARKER = "XY-WORKFLOW-CLAIM "
 _PACK_MARKER = "XY-WORKFLOW-TASK-PACK-V1"
+_PACK_INSTRUCTION = "Use this complete current Task Pack as your assignment. Limit writes to its owned_paths."
 _RECEIPT_HEADER = re.compile(r"(?:(?:Created|Completed) At: [0-9T:+.Z-]+\n)*Created the following subagent:\n")
 _UPDATE_ACK = re.compile(r"(?:Created At: [0-9T:+.Z-]+\nCompleted At: [0-9T:+.Z-]+\n){2}OK")
 _RECEIPT_FOOTER = ("\nThe subagent will send you a message when it has completed its task or requires guidance. "
@@ -64,8 +65,7 @@ def initial_prompt(root: Path, target: dict, marker: str) -> str:
     pack = export_current_task_pack(payload, task["id"], root=root)
     if task.get("solution_decisions") and not filter_ready(original, [task], [task["id"]]):
         raise TaskGraphError("AGY prompt requires current shared solution approvals")
-    return (f"{marker}\n{_PACK_MARKER}\n"
-            "Use this complete current Task Pack as your assignment. Limit writes to its owned_paths.\n"
+    return (f"{marker}\n{_PACK_MARKER}\n{_PACK_INSTRUCTION}\n"
             + json.dumps(pack, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
 
 
@@ -189,7 +189,9 @@ def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool
     updates = len(calls) - 1
     if updates and not app:
         return None
-    if updates:
+    # App 2.36 的完整日志也会在当前任务包的创建前只更新一次焦点，仍须逐条确认。
+    focus_only = updates == 1 and full and _focus_update(calls[0], full=full)
+    if updates and not focus_only:
         # App 可按任一顺序发出清单和焦点更新。仍只认一次清单、至多一次焦点，
         # 紧接一次创建，并逐条核对宿主确认。
         display = calls[:-1]
@@ -212,10 +214,15 @@ def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool
         except (ValueError, RecursionError):
             return None
     # 完整日志的参数是直接字符串。两个来源各按自己的格式读，禁止混用或猜测解码。
-    if isinstance(prompt, str) and isinstance(selector, str) and _matches_prompt(
-            selector, role, prompt, marker, expected_prompt):
-        return event["step_index"] + 1, updates
-    return None
+    if not isinstance(prompt, str) or not isinstance(selector, str):
+        return None
+    # 绑定后按原子会话和标记重放回执，原任务包可能已更新。只接受可识别的当前格式，
+    # 首次绑定仍由 _matches_prompt 核对完整的原生派发提示。
+    if focus_only and not prompt.startswith(f"{marker}\n{_PACK_MARKER}\n{_PACK_INSTRUCTION}\n{{"):
+        return None
+    if not _matches_prompt(selector, role, prompt, marker, expected_prompt):
+        return None
+    return event["step_index"] + 1, updates
 
 
 def _matches_receipt(content: str, agent_id: str, log: Path, workspace: Path) -> bool:

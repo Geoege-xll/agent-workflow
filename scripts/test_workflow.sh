@@ -30,7 +30,7 @@ GROUPS = {
     "plugin": modules(
         "claude_first_install", "claude_candidate_source", "plugin_delivery", "plugin_resources", "selected_skills", "plugin_workflow_contract",
         "plugin_maintenance_contract", "continuous_intake_capabilities", "conversation_scope", "agent_continuation",
-        "dispatch_admission", "task_pool", "task_intent", "plugin_task_pool",
+        "dispatch_admission", "task_pool", "task_intent", "plugin_task_pool", "antigravity_dispatch_receipt",
         "task_settlement", "task_graph", "task_graph_init", "task_graph_records",
         "scheduler_boundaries", "workflow_closure", "foundation_qa", "qa_handoff", "qa_rule_routing", "review_target", "plugin_worktree_delivery",
         "worktree_delivery", "design_standards_lifecycle", "production_only_revisions", "light_ui_copy",
