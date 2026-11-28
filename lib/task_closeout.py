@@ -44,6 +44,12 @@ def accepted(root, rows):
             return "unique_request_qa_required"
         if full and not current_request_receipt(graph.source, qa, root=root):
             return "current_request_qa_receipt_required"
+        # 原 QA 回执先独立通过。只有收口核对 PM 在冻结范围时明确选定的原文档，
+        # 避免把验收后才能登记的回填变成 QA 或回填本身的前置条件。
+        selected = qa.get("qa_projection_baselines", {})
+        projected = {entry["path"] for entry in qa.get("qa_projection", {}).get("documents", [])}
+        if full and not projected.issuperset(selected):
+            return "required_plan_projection_pending"
     return None
 
 

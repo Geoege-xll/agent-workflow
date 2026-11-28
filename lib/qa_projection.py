@@ -6,12 +6,13 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 
+from lib.documents.document_links import projection_link_errors
 from lib.documents.markdown_headings import atx_section_bounds
-from lib.documents.plan_documents import SECTIONS, parse_plan, validate_selected_plans
+from lib.documents.plan_documents import SECTIONS, parse_plan
 from lib.foundation_qa import _reference, _sha
 from lib.safe_text import read_file
 from lib.task_graph import TaskGraphError
-from lib.task_graph_records import digest, read_record
+from lib.task_graph_records import digest, file_digest, read_record
 from lib.validate_project_docs import project_docs_layout
 
 
@@ -126,7 +127,7 @@ def _plan_evidence(body: str, path: str, *, new_evidence: bool = False, new_deli
     return stable.rstrip("\r\n"), delivered, evidence, document
 
 
-def _verify_plan(path: str, before: str, after: str, qa: dict, payload: dict) -> None:
+def _verify_plan(path: str, before: str, after: str, qa: dict, payload: dict) -> str:
     """旧交付段必须整段保留；首次交付可替换无基线模板并引用已经存在的批准。"""
     stable, delivered, old_evidence, old = _plan_evidence(before, path)
     first = old.accepted_version == "none" and SECTIONS[5] not in old.sections
@@ -156,6 +157,7 @@ def _verify_plan(path: str, before: str, after: str, qa: dict, payload: dict) ->
     for line in Counter(after.splitlines()) - Counter(before.splitlines()):
         if re.search(r"<!--|</?[A-Za-z]|^\s*(```|~~~|\[[^]]+\]:)|^ {4}|^\t", line):
             raise TaskGraphError("PM projection only permits plain closeout text and verified links")
+    return new.topic_id.casefold()
 
 
 def _git_document(repo: Path, revision: str, name: str) -> bytes:
@@ -223,6 +225,8 @@ def verify_projection(payload: dict, qa: dict, root: Path, *, delivered: bool = 
     _, docs = project_docs_layout(candidate, Path(adapter))
     plans = [name for name in names if projection_kind(name, docs) == "plan"]
     originals = {}
+    topics = {}
+    documents = {}
     for entry in entries:
         name = entry["path"]
         kind = projection_kind(name, docs)
@@ -268,8 +272,12 @@ def verify_projection(payload: dict, qa: dict, root: Path, *, delivered: bool = 
                     revision = repositories[0]["head_revision"] if len(repositories) == 1 and repositories[0]["path"] == "." else None
             if not revision or _git_document(root, revision, name) != previous:
                 raise TaskGraphError("PM-owned document differs from the reviewed Git commit")
+        before, after = previous.decode("utf-8"), current.decode("utf-8")
         if kind == "plan":
-            _verify_plan(name, previous.decode(), current.decode(), qa, payload)
+            topic = _verify_plan(name, before, after, qa, payload)
+            if not delivered and topic in topics and not target.samefile(topics[topic]):
+                raise TaskGraphError(f"duplicate 主题 ID {topic}: {topics[topic]} and {target}")
+            topics[topic] = target
         else:
             # 目录/架构的维护信息可在受审候选中完整编辑。验收后的附加导航只引用本次
             # 一并验证的主题，不能借 ARCHITECTURE 或 PROJECT 发布未经审查的职责修改。
@@ -279,7 +287,12 @@ def verify_projection(payload: dict, qa: dict, root: Path, *, delivered: bool = 
             if current not in allowed:
                 raise TaskGraphError("post-QA index projection requires an exact link to a verified plan")
         originals[name] = (digest(previous), digest(current))
-    errors = [] if delivered else validate_selected_plans(candidate, [Path(plan) for plan in plans])
-    if errors:
-        raise TaskGraphError("invalid PM plan projection: " + "; ".join(errors))
+        documents[target] = before, after
+    # 已交付的历史收口仍按原提交重放。活动候选只核对当前新增或改变的引用，
+    # 避免把历史证据链接或下次发布的实物当成本轮写回的输入。
+    if not delivered:
+        errors = projection_link_errors(candidate, documents,
+                                        lambda target: file_digest(candidate, target.relative_to(candidate).as_posix()))
+        if errors:
+            raise TaskGraphError("invalid PM projection links or evidence: " + "; ".join(errors))
     return originals

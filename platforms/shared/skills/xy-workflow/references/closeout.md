@@ -63,7 +63,11 @@ Full 的原 QA 任务包、handoff、`request_receipt` 和受审文档原字节�
 {"tasks":{"qa":{"record_qa_projection":{"adapter":"project.yaml","documents":[{"path":"docs/plans/example.md","reviewed":{"path":"/absolute/evidence/reviewed-example.md","sha256":"<原字节摘要>"},"projected_sha256":"<当前文档摘要>"}]}}}}
 ```
 
-单树从原冻结范围复算受审摘要。主题同时属于受控读取或设计权威时，原已核对的需求、实现与审查合同共用同一份经过验证的前像。Foundation 最终包保留全部 Writer 范围；有本地 Git 提交时，包中的 `qa_document_base` 可定位由 PM 独占的已有文档。对于受审范围之外的 PM 专有文档，工具用同一仓库已冻结的 Git 提交核对原对象。已有未跟踪的 PM 文档可以在原有冻结步骤（Foundation 阶段通过后、最终交接前）使用 `"freeze_qa_scope":{"scope_ref":{"repositories":[…]},"projection_paths":["docs/plans/example.md"]}` 预存字节摘要，保留原档供验收后回放。原档或受审提交不可恢复时应先取得可核实的原始依据。登记、后续就绪与交付核对都会检查原回执及其余受审业务。需求、批准、接口或规范发生变化时，回到受影响的验收范围。
+单树从原冻结范围复算受审摘要。主题同时属于受控读取或设计权威时，原已核对的需求、实现与审查合同共用同一份经过验证的前像。Foundation 最终包保留全部 Writer 范围；有本地 Git 提交时，包中的 `qa_document_base` 可定位由 PM 独占的已有文档。对于受审范围之外的 PM 专有文档，工具用同一仓库已冻结的 Git 提交核对原对象。
+
+在原有冻结步骤（Foundation 阶段通过后、最终交接前）使用 `"freeze_qa_scope":{"scope_ref":{"repositories":[…]},"projection_paths":["docs/plans/example.md"]}` 指定本轮应写回的具体原主题，包含已有但尚未跟踪的主题。保留原档供验收后回放。独立 QA 仍可先通过。收口返回 `required_plan_projection_pending` 时，完成选定原主题的投影登记后再继续。省略 `projection_paths` 的 Full 请求按既有收口条件推进。原档或受审提交不可恢复时，应先取得可核实的原始依据。
+
+登记时使用相对当前 Markdown 的项目内路径。工具核对活动投影新增或改变的链接，并读取这些链接直接引用的 Markdown 证据及其中的链接。要为实际文件声明字节摘要，将 `SHA256=<64 位十六进制摘要>` 写在文件链接后，同一行以空格分隔，例如 `[本轮 SQL](../evidence/release.sql) SHA256=<实际摘要>`。QA handoff 的摘要继续按原方式记录。登记、后续就绪与交付核对都会检查原回执及其余受审业务。已交付且清理了集成工作树的记录按原 Git 对象重放。需求、批准、接口或规范发生变化时，回到受影响的验收范围。
 
 隔离请求保留原 `worktree_integrations` 及其构建、QA 提交。PM 将验收事实提交到该集成工作树，在上例操作中增加 `head_revision` 指向最终文档提交。工具核对两个提交之间的全部差异。交付的 `projection_paths` 明列 PM 路径，合并授权绑定最终提交和完整差异。PROJECT 与相邻的 `ARCHITECTURE.md` 可在受审候选中包含实际目录或模块职责更新。若在 QA 后补入口，可用一条普通 Markdown 列表链接指向本次登记的主题，标签取计划文件名去掉扩展名，路径相对于索引页。其余结构描述应在受审候选中核对。
 

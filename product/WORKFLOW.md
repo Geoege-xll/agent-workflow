@@ -1383,6 +1383,11 @@ applicable scope, replace that fact in place after applicable verification. This
 new topic document, a PROJECT entry, or a change chronology.
 
 验收后，PM 将实际变化的行为、版本和证据写回原主题。PROJECT 的主题目录用普通链接提供导航，标为已验收的条目须与同一主题的真实验收依据对应。
+PM 可以在原主题提前记录已批准计划、进展和阻塞，同时保留上次验收的版本、日期和证据。
+Full 单树请求在原 QA 范围冻结时，通过 `projection_paths` 列出本轮选定的原主题。
+独立 QA 通过后，PM 使用 `record_qa_projection` 登记实际写回。收口检查这些原主题是否均已登记，
+写回校验覆盖新增或改变的本地链接、直接引用的 Markdown 证据和紧接文件链接的显式 SHA256 声明。
+具体命令及声明格式见[工作流收口](../platforms/shared/skills/xy-workflow/references/closeout.md#qa-后登记已验收事实)。
 For `change_type: removed`, mark the same source `removed`, remove the current PROJECT link, and repair references while retaining necessary deletion rationale and history. QA failure preserves original accepted facts.
 
 Every Full task pack and applicable Light task pack also includes these fields directly inside `task`:

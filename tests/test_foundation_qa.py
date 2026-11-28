@@ -621,9 +621,14 @@ class FoundationQATest(unittest.TestCase):
 
     def check_untracked_pm_plan(self, *, staged):
         """非提交中的 PM 草稿先在已有冻结步骤取前像，受审业务范围和所有权保持各自来源。"""
+        from types import SimpleNamespace
+        from lib.task_closeout import accepted as closeout_status
+
         plan = self.root / "docs/plans/untracked.md"
         plan.parent.mkdir()
-        plan.write_text((REPO / "templates/docs/PLAN.md").read_text())
+        historical = "历史发布记录保留 [已退役证据](missing-archive.md) 和摘要 " + "f" * 64
+        plan.write_text((REPO / "templates/docs/PLAN.md").read_text()
+                        .replace("## 需求与验收\n", "## 需求与验收\n\n" + historical + "\n"))
         (self.root / "project.yaml").write_bytes((REPO / "project.yaml").read_bytes())
         original = plan.read_bytes()
         source = self.source if staged else self.ordinary_source()
@@ -642,23 +647,57 @@ class FoundationQATest(unittest.TestCase):
         self.assertTrue(all(name not in task["owned_paths"] for task in frozen["tasks"]))
         active = self.start(frozen)
         _, _, refs = self.evidence(active, "first-pm-baseline")
+        def closeout(graph):
+            snapshot = SimpleNamespace(source=graph, external_occupancy=False)
+            return closeout_status(self.root, [(snapshot, task) for task in graph["tasks"]])
+
         plan.write_text("未验收的内容替换")
         with self.assertRaisesRegex(ValueError, "baseline changed"):
             self.update(active, "qa", {"accept_request": refs})
         plan.write_bytes(original)
         accepted = self.update(active, "qa", {"accept_request": refs})
+        self.assertTrue(foundation_qa.current_request_receipt(accepted, accepted["tasks"][2]))
+        with self.subTest("closeout must wait for selected plan"):
+            self.assertEqual("required_plan_projection_pending", closeout(accepted))
         before = self.root / "untracked-original.md"
         before.write_bytes(original)
         delivered = original.decode().replace("已验收版本: `none`", "已验收版本: `v1`")
         placeholder = delivered.split("## 验收结果与当前已交付行为\n\n")[1].split("\n")[0]
         delivered = delivered.replace(placeholder, "已验证失败后可重试。")
         delivered += "\n## 批准依据与必要证据\n\n- 批准依据: requirements_approved@" + "a" * 64
-        plan.write_text(delivered + "\n- 验收证据: " + refs["handoff"]["sha256"] + "\n")
-        entry = {"path": name, "reviewed": {"path": str(before), "sha256": records.digest(original)},
-                 "projected_sha256": records.digest(plan.read_bytes())}
-        updated = self.update(accepted, "qa", {"record_qa_projection": {"adapter": "project.yaml", "documents": [entry]}})
+        delivered += "\n- 验收证据: " + refs["handoff"]["sha256"]
+        proof = self.root / "docs/proof.md"
+        artifact = self.root / "docs/release.sql"
+        artifact.write_bytes(b"current bytes\n")
+        current_sha = records.digest(artifact.read_bytes())
+        def projection(graph, evidence):
+            plan.write_text(f"{delivered} {evidence}\n")
+            entry = {"path": name, "reviewed": {"path": str(before), "sha256": records.digest(original)},
+                     "projected_sha256": records.digest(plan.read_bytes())}
+            return self.update(graph, "qa", {"record_qa_projection": {
+                "adapter": "project.yaml", "documents": [entry]}})
+
+        proof.write_text(f"[本轮 SQL](release.sql) SHA256={current_sha}\n")
+        with self.assertRaisesRegex(ValueError, "accepted request"):
+            projection(active, "[证据](../proof.md)")
+        for declaration, expected in (
+            ("[SQL](/tmp/release.sql)", "proof.md:1.*相对"),
+            ("[SQL](missing.sql)", "proof.md:1.*目标不存在"),
+            ("[SQL][evidence]\n\n[evidence]: missing.sql", "proof.md:1.*目标不存在"),
+            ("[SQL](release.sql) SHA256=" + records.digest(b"old bytes"), "proof.md:1.*SHA256"),
+        ):
+            with self.subTest(expected=expected):
+                proof.write_text(declaration + "\n")
+                with self.assertRaisesRegex(ValueError, expected):
+                    projection(accepted, "[证据](../proof.md)")
+        proof.write_text(f"[本轮 SQL](release.sql) SHA256={current_sha}\n")
+        updated = projection(accepted, "[证据](../proof.md)")
         self.assertTrue(foundation_qa.current_request_receipt(updated, updated["tasks"][2]))
         self.assertEqual(accepted["tasks"][2]["request_receipt"], updated["tasks"][2]["request_receipt"])
+        self.assertIn(historical, plan.read_text())
+        self.assertIsNone(closeout(updated))
+        artifact.write_bytes(b"changed since projection\n")
+        self.assertFalse(foundation_qa.current_request_receipt(updated, updated["tasks"][2]))
 
     def test_old_wrong_and_failed_handoff_cannot_release_features(self):
         started = self.start(self.source)
