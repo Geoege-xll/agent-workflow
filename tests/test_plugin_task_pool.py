@@ -123,6 +123,146 @@ class PackagedTaskPoolTest(unittest.TestCase):
                            expected or row["sha256"], "--patch", "-", code=code,
                            value={"tasks": {row["task_id"]: operation}})
 
+    def codex_hook(self, transcript, tool, command, *, actor=None, turn="current", cwd=None):
+        plugin = self.plugins["codex"]
+        hooks = json.loads((plugin / "hooks/hooks.json").read_bytes())["hooks"]
+        handler = hooks["PreToolUse"][0]["hooks"][0]["command"].replace("${PLUGIN_ROOT}", str(plugin))
+        event = {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"command": command},
+                 "session_id": "main-session", "turn_id": turn, "cwd": str(cwd or self.project),
+                 "transcript_path": str(transcript)}
+        if actor:
+            event["agent_id"] = actor
+        raw = subprocess.run(shlex.split(handler), input=json.dumps(event), env=self.env, cwd=self.workspace,
+                             capture_output=True, text=True, timeout=15)
+        self.assertEqual(0, raw.returncode, raw.stderr)
+        output = json.loads(raw.stdout)
+        return output.get("hookSpecificOutput", {}).get("permissionDecision", "allow")
+
+    def codex_rollout(self, name, *, agent_path=None, user=None, item_type="UserMessage", cwd=None):
+        path = self.workspace / (name + ".jsonl")
+        metadata = {"id": name, "cwd": str(cwd or self.project), "source": "cli"}
+        if agent_path:
+            metadata.update(agent_path=agent_path, source={"subagent": {"thread_spawn": {
+                "depth": 1, "parent_thread_id": "main-session", "agent_path": agent_path,
+                "agent_nickname": "writer", "agent_role": "xy-backend",
+            }}})
+        entries = [{"type": "session_meta", "payload": metadata}]
+        if user:
+            entries.append({"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "current",
+                "thread_id": name, "item": {"type": item_type, "content": [{"type": "text", "text": user}]}}})
+        path.write_text("".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries))
+        return path
+
+    def test_codex_write_ownership_uses_current_native_task_and_user_item(self):
+        host, request = "codex", "guarded"
+        path = self.register(host, request, request, light=True, owned="src/fixture.txt")
+        compile_command = "python3 -m py_compile src/runtime_check.py"
+        (self.project / "src/runtime_check.py").write_text("answer = 42\n")
+        source = json.loads(path.read_bytes())
+        source["task"]["verification_commands"] = [compile_command]
+        path.write_text(json.dumps(source))
+        pm = self.codex_rollout("main-session", user="实现当前功能")
+        child = self.codex_rollout("writer-thread", agent_path="/root/guarded")
+        reviewer = self.codex_rollout("review-thread", agent_path="/root/review")
+        patch = "*** Begin Patch\n*** Add File: src/fixture.txt\n+content\n*** End Patch"
+        move = "*** Begin Patch\n*** Update File: src/fixture.txt\n*** Move to: src/peer.txt\n@@\n-old\n+new\n*** End Patch"
+        self.assertEqual("deny", self.codex_hook(pm, "apply_patch", patch))
+        self.assertEqual("deny", self.codex_hook(pm, "Bash", "printf '%s' content > src/fixture.txt"))
+        self.assertEqual("allow", self.codex_hook(pm, "Bash", "rg -n fixture src && git diff --stat"))
+        self.assertEqual("allow", self.codex_hook(pm, "Bash", "pwd\ngit status --short\nrg --files src"))
+        self.assertEqual("deny", self.codex_hook(pm, "Bash", "pwd\nprintf '%s' content > src/fixture.txt"))
+        self.assertEqual("allow", self.codex_hook(pm, "apply_patch",
+            "*** Begin Patch\n*** Add File: docs/plans/fixture.md\n+# Plan\n*** End Patch"))
+        scratch = self.invoke(host, GRAPH, "scratch", "--root", self.project, "--request-id", request)["scratch_dir"]
+        plugin = self.plugins[host]
+        graph_command = ["bash", str(plugin / "lib/python_runtime.sh"), "-B", "-X", "utf8",
+                         str(plugin / "plugins/source_pack.py"), "helper", "--project", str(self.project), GRAPH]
+        self.assertEqual("allow", self.codex_hook(pm, "Bash", shlex.join([
+            *graph_command, "scratch", "--root", str(self.project), "--request-id", request])))
+        self.assertEqual("allow", self.codex_hook(pm, "Bash", f"cat > {scratch}/candidate.json <<'JSON'\n{{}}\nJSON"))
+        self.assertEqual("deny", self.codex_hook(child, "apply_patch", patch, actor="writer-thread"))
+
+        claim_file = self.workspace / "claim.json"
+        claim_file.write_text(json.dumps(self.claim(host, self.locate(host, request))))
+        self.pool(host, "bind", "--host", host, "--agent-id", "/root/guarded", "--receipt", claim_file)
+        self.assertEqual("allow", self.codex_hook(child, "apply_patch", patch, actor="writer-thread"))
+        self.assertEqual("allow", self.codex_hook(child, "Bash", compile_command, actor="writer-thread"))
+        self.assertEqual("deny", self.codex_hook(reviewer, "Bash", compile_command, actor="review-thread"))
+        self.assertEqual("allow", self.codex_hook(child, "Bash", "printf '%s' content > src/fixture.txt",
+                                                 actor="writer-thread"))
+        self.assertEqual("deny", self.codex_hook(child, "apply_patch", move, actor="writer-thread"))
+        self.assertEqual("deny", self.codex_hook(reviewer, "apply_patch", patch, actor="review-thread"))
+        self.assertEqual("deny", self.codex_hook(reviewer, "apply_patch", patch, actor="writer-thread"))
+
+        pm = self.codex_rollout("main-session", user="请 PM 本人直接修改 src/fixture.txt")
+        self.assertEqual("allow", self.codex_hook(pm, "apply_patch", patch))
+        self.assertEqual("deny", self.codex_hook(pm, "apply_patch", move))
+        self.assertEqual("deny", self.codex_hook(pm, "apply_patch", patch, turn="next"))
+        pm = self.codex_rollout("main-session", user="PM 自己修改 src/fixture.txt", item_type="HookPrompt")
+        self.assertEqual("deny", self.codex_hook(pm, "apply_patch", patch))
+
+        before = path.read_bytes()
+        row = self.locate(host, request)
+        self.update(host, row, {"withdraw": {"reason": "user requested stop"}})
+        self.assertNotEqual(before, path.read_bytes())
+        self.assertEqual("deny", self.codex_hook(child, "apply_patch", patch, actor="writer-thread"))
+
+    def test_packaged_closeout_keeps_evidence_and_uses_scratch_snapshot(self):
+        host, request = "codex", "closing"
+        original = self.register(host, request, request, light=True)
+        pm = "codex:main-session"
+        report = self.pool(host, "closeout", "--request-id", request)
+        self.assertEqual("request_contains_unaccepted_work", report["reason"])
+        receipt_path = self.workspace / "claim.json"
+        receipt_path.write_text(json.dumps(self.claim(host, self.locate(host, request))))
+        agent = {"host": host, "agent_id": "/root/closing"}
+        self.pool(host, "bind", "--host", host, "--agent-id", agent["agent_id"], "--receipt", receipt_path)
+        self.update(host, self.locate(host, request), {"set": {"state": "BUILD_VERIFIED"}})
+
+        scratch = Path(self.invoke(host, GRAPH, "scratch", "--root", self.project, "--request-id", request)["scratch_dir"])
+        proof, log, unused = (scratch / name for name in ("preserved.json", "native.log", "regenerable.txt"))
+        log.write_text("verified native close and delivery evidence")
+        deliverable = self.workspace / "actual-result.bin"
+        deliverable.write_bytes(b"\xff\xfe" * 100)
+        unused.write_text("temporary output")
+        proof.write_text(json.dumps([{"path": str(path), "sha256": digest(path)} for path in (log, deliverable)]))
+        preview = self.pool(host, "closeout", "--request-id", request, "--preservation", proof)
+        target, = preview["targets"]
+        self.assertEqual(agent, target["agent_ref"])
+
+        evidence = scratch / "terminal.json"
+        observation = {"schema_version": 1, "agent_ref": agent, "outcome": "closed",
+                       "native_evidence": {"path": str(log), "sha256": digest(log)},
+                       "preservation": preview["preservation"]}
+        args = ("--request-id", request, "--task-id", target["task_id"], "--record", original,
+                "--expect-sha256", target["sha256"], "--evidence", evidence)
+        evidence.write_text(json.dumps({**observation, "agent_ref": {"host": host, "agent_id": "different"}}))
+        self.assertIn("exact native ID", self.pool(host, "finish-closeout", *args, code=2)["error"])
+        evidence.write_text(json.dumps(observation))
+        out = self.pool(host, "finish-closeout", *args)
+        self.assertEqual(("closed", True), (out["status"], out["agent_retired"]))
+
+        command = ("cleanup-scratch", "--root", self.project, "--pm-id", pm, "--request-id", request)
+        scan = self.invoke(host, GRAPH, *command, "--dry-run")
+        self.assertEqual({"native.log", "preserved.json"}, set(scan["kept_files"]))
+        unused.write_text("changed since scan")
+        self.invoke(host, GRAPH, *command, "--expect-sha256", scan["snapshot_sha256"], code=2)
+        scan = self.invoke(host, GRAPH, *command, "--dry-run")
+        overlap = self.workspace / "second-original.json"
+        other = json.loads(original.read_bytes())
+        other["task"].pop("agent_ref")
+        other["task"].pop("agent_retired")
+        overlap.write_text(json.dumps(other))
+        self.invoke(host, POOL, "register", "--root", self.project, "--pm-id", "codex:other",
+                    "--record", overlap, "--expect-sha256", digest(overlap))
+        refusal = self.invoke(host, GRAPH, *command, "--expect-sha256", scan["snapshot_sha256"], code=2)
+        self.assertIn("scratch request ownership", refusal["error"])
+        self.invoke(host, POOL, "archive", "--root", self.project, "--pm-id", "codex:other",
+                    "--record", overlap, "--expect-sha256", digest(overlap))
+        self.invoke(host, GRAPH, *command, "--expect-sha256", scan["snapshot_sha256"])
+        self.assertTrue(original.is_file() and log.is_file() and proof.is_file())
+        self.assertFalse(unused.exists())
+
     def test_codex_prototype_only_single_packs_are_claimed_and_bound_before_handoff(self):
         from tests.test_plugin_workflow_contract import visual_request
         # 正常仅原型入口直接消费两个独立单包，测试不建 Full 图或生产 QA。
@@ -416,7 +556,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
 
         # 使用同一个在途已绑定原件。从两个独立包真实运行核验及恢复，
         # 即使没有 AGY 解释器也要识别任务占用和有效身份，并拒绝相同父子 UUID。
-        modules = ("lib/hosts/antigravity_dispatch.py", "lib/hosts/antigravity_handoff.py", "hooks/write_guard.py")
+        modules = ("lib/hosts/antigravity_dispatch.py", "lib/hosts/antigravity_handoff.py")
         for other in ("codex", "claude"):
             with self.subTest(host=other):
                 self.assertTrue(all(not (self.plugins[other] / name).exists() for name in modules))
@@ -713,7 +853,12 @@ class PackagedTaskPoolTest(unittest.TestCase):
         self.assertIn("write_guard.py", manifest["xy-workflow-write-ownership"]["PreToolUse"][0]["hooks"][0]["command"])
         for other in ("codex", "claude"):
             self.assertFalse((self.plugins[other] / "hooks.json").exists())
-            self.assertFalse((self.plugins[other] / "hooks/write_guard.py").exists())
+        self.assertFalse((self.plugins["claude"] / "hooks/write_guard.py").exists())
+        codex_sources = json.loads((self.plugins["codex"] / "sources.json").read_bytes())
+        self.assertEqual("plugins/codex/hooks/write_guard.py",
+                         codex_sources["projections"]["hooks/write_guard.py"]["source"])
+        self.assertFalse((self.plugins["codex"] / "lib/hosts/antigravity_dispatch.py").exists())
+        self.assertFalse((plugin / "hooks/native_event.py").exists())
         scratch = Path(self.invoke("antigravity", GRAPH, "scratch", "--root", self.project,
                                    "--request-id", "pm-guard")["scratch_dir"])
         self.assertEqual(self.project / ".awf/agy-requests", scratch.parent)
@@ -795,6 +940,10 @@ class PackagedTaskPoolTest(unittest.TestCase):
                 ("git diff --output=src/other.txt", "deny"), ("echo changed > src/fixture.txt", "deny"),
                 ("python3 -c 'print(1)'", "deny"), ("mkdir -p src/new", "deny"),
                 (f"{helper} task --input {target} --task-id api > {scratch}/export.json", "allow"),
+                (f"{prefix} {POOL} closeout --root {self.project} --pm-id {self.agy_pm} "
+                 f"--request-id pm-guard --preservation {scratch}/keeps.json", "allow"),
+                (f"{helper} cleanup-scratch --root {self.project} --pm-id {self.agy_pm} "
+                 "--request-id pm-guard --dry-run", "allow"),
                 (f"{helper} task --input {target} --task-id api --output {self.project}/src/fixture.txt", "deny"),
                 (f"{helper} task --input {target} --task-id api --output {scratch}/../outside.json", "deny")):
             with self.subTest(command=command):

@@ -108,7 +108,7 @@ LIB_FILES = (
     "dispatch_admission.py", "dispatch_admission_cli.py", "task_settlement.py", "foundation_qa.py", "qa_projection.py",
     # 三个宿主共用同一任务池。原图、准入与更新入口也会读取撤回和改版合同，
     # 因此任务意图模块属于包内运行依赖，即使调用者继续使用旧 CLI 也必须随包交付。
-    "task_pool.py", "task_pool_cli.py", "task_intent.py", "verification_inputs.py",
+    "task_pool.py", "task_pool_cli.py", "task_closeout.py", "task_intent.py", "verification_inputs.py",
     "task_graph_cli.py", "task_graph_init.py", "task_graph_records.py",
     "validate_project_docs.py", "worktree_policy.py",
 )
@@ -134,13 +134,15 @@ MAINTENANCE_INVOCATIONS = {"codex": "$" + PLUGIN_NAME + ":" + CONFIG_SKILL,
 HOST_RESOURCE_TARGETS = {
     "codex": {CODEX_NATIVE_CONTEXT: "identity", "skills/" + CONFIG_SKILL + "/agents/openai.yaml": "identity",
               "hooks/hooks.json": "identity", "hooks/session_start.py": "identity",
-              "hooks/result_closeout.py": "identity"},
+              "hooks/result_closeout.py": "identity", "hooks/native_event.py": "identity",
+              "hooks/write_guard.py": "identity", "hooks/guard_command.py": "identity"},
     "claude": {"agents/pm.md": "main-session-entry", "settings.json": "identity"},
     "antigravity": {"hooks.json": "identity", "hooks/write_guard.py": "identity",
                     "hooks/guard_command.py": "identity", "rules/AGENTS.md": "main-session-rules",
                     "lib/hosts/antigravity_dispatch.py": "identity", "lib/hosts/antigravity_handoff.py": "identity"},
 }
 HOST_FIXED_RESOURCE_SOURCES = {
+    "hooks/guard_command.py": "plugins/antigravity/guard_command.py",
     "skills/" + CONFIG_SKILL + "/agents/openai.yaml": MAINTENANCE_CODEX_POLICY,
     "rules/AGENTS.md": "plugins/main-session-context.md",
     # 只有 AGY 配置可映射原生日志与项目内交接策略；其它端仅装配共同合同。

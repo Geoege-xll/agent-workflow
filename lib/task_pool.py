@@ -431,6 +431,121 @@ def registered_tasks(root: Path, pm_id: str) -> tuple[RegisteredTask, ...]:
         )
 
 
+def bound_writer(projects: dict[Path, Path], pm_id: str, host: str, native_ids: set[str],
+                 cwd: Path) -> RegisteredTask | None:
+    """在原任务池中查找宿主已证实的 ID，并复核本次写入所依赖的现行门禁。"""
+    from lib.solution_confirmation import decision_gates
+    from lib.task_graph_cli import pack_snapshot
+    from lib.writer_prerequisites import require_writer
+
+    matches = []
+    for project in sorted(projects):
+        with _index(project, pm_id, create=False) as (_, data):
+            snapshots, errors = _read_pool(project, data["records"])
+            if errors:
+                raise TaskGraphError("registered task originals require verification")
+            for snap in snapshots:
+                for task in snap.tasks:
+                    ref = task.get("agent_ref")
+                    if ref and ref["host"] == host and ref["agent_id"] in native_ids:
+                        matches.append((project, snap, task, snapshots))
+    if len(matches) != 1:
+        return None
+    project, snap, task, snapshots = matches[0]
+    execution = Path(snap.descriptor["execution_roots"][task["id"]])
+    if (task["task_type"] != "writer" or task["role"] == "xy-qa" or task["state"] != "RUNNING"
+            or not task.get("claim_basis_sha256") or task.get("agent_retired") or task.get("withdrawal")
+            or execution not in projects or projects[execution] != projects[project] or not cwd.is_relative_to(execution)):
+        return None
+    graph = pack_snapshot(snap.source) if "task" in snap.source else snap.source
+    require_writer(graph, task, project)
+    decisions = decision_gates(task)
+    for peer in snapshots:
+        for related in peer.tasks:
+            if related["request_id"] != task["request_id"]:
+                continue
+            for name, gate in decision_gates(related).items():
+                if name in decisions and (decisions[name] != gate or gate not in peer.approved_gates):
+                    return None
+    return RegisteredTask(snap.descriptor["path"], execution, task)
+
+
+def _closeout_snapshots(root, data):
+    snapshots, errors = _read_pool(root, data["records"])
+    if errors:
+        raise TaskGraphError("closeout requires the registered originals")
+    return snapshots
+
+
+def closeout(root, pm_id, request_id, preservation=None, *, installed=None):
+    from lib import task_closeout
+    with _index(root, pm_id, create=False) as (_, data):
+        return task_closeout.plan(root, pm_id, _closeout_snapshots(root, data), request_id,
+                                  preservation, installed=installed)
+
+
+def finish_closeout(root, pm_id, target, expected, observation, *, installed=None):
+    """以同一原任务 CAS 记录终态观察和退役；只能处理当前计划中的精确实例。"""
+    from lib import task_closeout
+    from lib.task_graph_cli import publish_task_update
+
+    receipt = records.decode(records.read_record(observation))
+    if not isinstance(receipt, dict) or not isinstance(receipt.get("preservation"), dict):
+        raise TaskGraphError("closeout requires a native terminal observation and preservation receipt")
+    proof = dispatch._absolute(receipt["preservation"].get("path"))
+    path = dispatch._absolute(target["record"])
+    with _index(root, pm_id, create=False) as (_, data):
+        snapshots = _closeout_snapshots(root, data)
+        plan = task_closeout.plan(root, pm_id, snapshots, target["request_id"], proof, installed=installed)
+        matching = [item for item in plan["targets"]
+                    if item["record"] == str(path) and item["task_id"] == target["task_id"]]
+        if not matching or matching[0]["sha256"] != dispatch._sha(expected):
+            raise TaskGraphError("closeout target is no longer eligible at this record SHA")
+        task_closeout.terminal(receipt, matching[0]["agent_ref"], plan["preservation"])
+        if Path(receipt["native_evidence"]["path"]).samefile(path):
+            raise TaskGraphError("native closeout evidence must be independent from the task original")
+        body = records.read_record(path)
+        line = task_closeout.PREFIX + json.dumps(receipt, ensure_ascii=False, sort_keys=True)
+        patch = {"tasks": {target["task_id"]: {"set": {"agent_retired": True},
+                                             "append": {"acceptance_evidence": [line]}}}}
+        updated = publish_task_update(path, root, records.decode(body), body, expected, patch, pool_operation=True)
+        return {**updated, "status": receipt["outcome"], "agent_ref": matching[0]["agent_ref"],
+                "agent_retired": True}
+
+
+def cleanup_request(root, pm_id, request_id, *, dry_run, keep, expected, handoff, installed=None):
+    """在请求验收及保全复核后走原 cleanup-scratch 的明确预览和元数据 CAS。"""
+    from lib import task_closeout
+    from lib.hosts.handoff import validated_scratch_slot
+
+    task_closeout.closeout_host(pm_id, installed)
+    slot = validated_scratch_slot(request_id)
+    target = handoff.cleanup_base(root, slot) / slot
+    with _index(root, pm_id, create=False) as (_, data):
+        registered = registered_record_paths(root)
+        with solutions._locked_directories({path.parent for path in registered}):
+            snapshots = _closeout_snapshots(root, data)
+            rows = task_closeout.request_tasks(snapshots, request_id)
+            blocker = task_closeout.accepted(root, rows)
+            if blocker:
+                raise TaskGraphError("request cannot be cleaned: " + blocker)
+            if any(task.get("agent_ref") and not task_closeout.retired(task) for _, task in rows):
+                raise TaskGraphError("request cannot be cleaned before accepted instances are retired")
+            if registered_record_paths(root) != registered:
+                raise TaskGraphError("registered records changed during cleanup preview")
+            originals = [(path, records.decode(records.read_record(path))) for path in sorted(registered)]
+            selected = {Path(snap.descriptor["path"]) for snap, _ in rows}
+            for path, source in originals:
+                requests = {task["request_id"] for task in dispatch.authoritative_tasks(source)}
+                if (path.is_relative_to(target) and (path not in selected or requests != {request_id})
+                        or request_id in requests and path not in selected):
+                    raise TaskGraphError("scratch request ownership overlaps another registered original")
+            kept = task_closeout.keep_scratch(target, originals, records._scratch_keep_paths(keep))
+            require_registered_scratch_keeps(root, target, kept)
+            return records.cleanup_scratch(root, request_id, dry_run=dry_run, keep=kept,
+                                           expected=expected, handoff=handoff)
+
+
 @contextmanager
 def registered_delivery(root: Path, pm_id: str, graph: dict):
     """绑定当前 PM 登记的唯一请求图。交付者只在最终发布时短暂持有同一对池锁和原件锁。"""

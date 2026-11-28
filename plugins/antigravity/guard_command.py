@@ -293,6 +293,16 @@ def packaged_helper(words, access, plugin, cwd, *, redirected=False):
             return False
         output = project / values["--output"]
         return access.scratch_file(output) and access.can_write(str(output), project)
+    if helper == "lib/task_pool_cli.py" and action in {"closeout", "finish-closeout"}:
+        required = {"--root", "--pm-id", "--request-id"}
+        if action == "finish-closeout":
+            required.update({"--record", "--task-id", "--expect-sha256", "--evidence"})
+        values = options(rest, required | ({"--preservation"} if action == "closeout" else set()))
+        return (not access.parent and required <= values.keys()
+                and access.project_root(values["--root"], expected=project)
+                and values["--pm-id"] == "antigravity:" + access.current
+                and all(access.scratch_file(project / values[key], project)
+                        for key in ("--record", "--evidence", "--preservation") if key in values))
     if helper == "lib/task_pool_cli.py" and action in {"handoff", "complete-writer"}:
         if access.parent or redirected:
             return False
@@ -417,6 +427,12 @@ def command_allowed(args, access, plugin):
     line = args.get("CommandLine")
     raw_cwd = args.get("Cwd")
     cwd = access.cwd if raw_cwd in (None, "") else access.workspace_directory(raw_cwd)
+    return shell_allowed(line, cwd, access, plugin)
+
+
+def shell_allowed(line, cwd, access, plugin, *, helper=packaged_helper, maintenance=maintenance_allowed,
+                  read_only=False):
+    """解析有限的 shell 命令形态；宿主事件适配和身份权限由调用者分别处理。"""
     # 仅识别无二次解释的独立命令。保守地先排除变量/替换/多行/控制符，即使它们
     # 出现在引号中；需要复杂文本的任务包和计划用原生 write_file 保留原始字节。
     if not isinstance(line, str) or any(ch in line for ch in "\n\r\0$`;<(){}!~"):
@@ -460,14 +476,16 @@ def command_allowed(args, access, plugin):
         # 例外只作用于已识别的只读命令，禁止组合 stdout 写入、执行器或 helper。
         return not any(ch in unquoted for ch in ">&|") and read_command(words, access, cwd)
     redirect = next((i for i, word in enumerate(words) if ">" in word), None)
+    if read_only:
+        return redirect is None and read_command(words, access, cwd)
     if redirect is not None:
         if (redirect != len(words) - 2 or words[redirect] not in {">", ">>"} or redirect == 0
                 or not access.can_write(words[-1], cwd)):
             return False
         words = words[:redirect]
     if words[:2] == ["bash", str(plugin / "plugins/maintenance/launcher.sh")]:
-        return redirect is None and maintenance_allowed(words, access, plugin)
-    if read_command(words, access, cwd) or packaged_helper(words, access, plugin, cwd, redirected=redirect is not None):
+        return redirect is None and maintenance(words, access, plugin)
+    if read_command(words, access, cwd) or helper(words, access, plugin, cwd, redirected=redirect is not None):
         return True
     if words[0] in {"touch", "mkdir"}:
         paths = words[1:]

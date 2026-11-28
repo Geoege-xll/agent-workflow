@@ -9,6 +9,9 @@
     {"source": "plugins/maintenance/skills/xy-config/agents/openai.yaml", "target": "skills/xy-config/agents/openai.yaml"},
     {"source": "plugins/codex/hooks/hooks.json", "target": "hooks/hooks.json"},
     {"source": "plugins/codex/hooks/session_start.py", "target": "hooks/session_start.py"},
-    {"source": "plugins/codex/hooks/result_closeout.py", "target": "hooks/result_closeout.py"}
+    {"source": "plugins/codex/hooks/result_closeout.py", "target": "hooks/result_closeout.py"},
+    {"source": "plugins/codex/hooks/native_event.py", "target": "hooks/native_event.py"},
+    {"source": "plugins/codex/hooks/write_guard.py", "target": "hooks/write_guard.py"},
+    {"source": "plugins/antigravity/guard_command.py", "target": "hooks/guard_command.py"}
   ]
 }

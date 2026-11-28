@@ -250,3 +250,7 @@ reuse unaffected completed evidence. Do not turn plan persistence into another c
 ### Plugin resources
 
 Use the host-discovered plugin-qualified Skill and Agent names. Check actual invocation, model and project scope in the target session. Auto Memory, permissions and optional user Hooks remain under Claude Code settings. Verify the working directory after switching to a worktree.
+
+
+已验收的实例按[共用收口入口](../../shared/skills/xy-workflow/references/closeout.md#回收已验收的原生实例)
+核对当前请求、证据保全和精确原生 ID，再用当前会话实际提供的工具处理。 Claude Code 的 `TaskStop` 可停止当前执行，后续仍可能恢复。只在观察到对应停止结果时登记 `stopped`。

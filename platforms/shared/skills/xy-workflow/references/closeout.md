@@ -120,3 +120,34 @@ Under pressure, prefer accepted, sufficiently handed-off instances; do not simpl
 evidence-unreceived or necessary-review instances. Protect temporary worktrees/sole logs before AGY kill.
 Preserve existing recovery boundaries for cancellation/exceptions. Native closure/scratch cleanup must not
 delete still-referenced sole evidence.
+
+
+## 回收已验收的原生实例
+
+反馈窗口结束且没有返工后，PM 从本请求原登记核对 Writer 构建/运行、适用的独立 QA
+及实际交付。Full 生产交付须有当前唯一 Reviewer 的请求级有效 PASS。单独委托的只读、
+证据或原型按它们现有验收结束。先保全交付成果和必要证据，AGY 的临时工作树尤其
+需在原生 kill 之前确认外部留存。
+
+通过同包 helper 的 `lib/task_pool_cli.py closeout --root <项目> --pm-id <当前PM>
+--request-id <请求> --preservation <证据引用.json>` 只读取得可回收目标。保留清单是实际
+成果、验证和必要证据的绝对文件路径与字节 SHA-256 列表，每项形如
+`{"path":"<实际文件>","sha256":"<当前字节SHA>"}`。临时工作树中的原件应先保存在工作树之外。
+有未验收任务、待返工 Reviewer、待定工作或证据缺口时保留当前原件及占用。
+
+使用当前宿主确实提供的关闭、停止或终止工具处理计划中**同一原生 ID**，保留实际回执。
+仅停止的回执登记为 `stopped`，可证实关闭才登记 `closed`。宿主只能确认已安全结束，
+无法关闭或关闭未获证实时使用 `retired` 并保留依据。继续保有历史转录。逻辑任务池占用由
+已有验收状态决定，退役标记只约束后续复用。不同宿主的真实工具和能力见各自 PM 适配。
+
+写入一份终态观察 JSON，包含 `schema_version: 1`、计划中的完整 `agent_ref`、观察所得
+`outcome`、`native_evidence` 的绝对路径与 SHA 以及计划返回的 `preservation` 引用。
+通过 `lib/task_pool_cli.py finish-closeout --root <项目> --pm-id <当前PM>
+--request-id <请求> --record <原件> --task-id <任务> --expect-sha256 <计划中的原件SHA>
+--evidence <终态观察.json>` 在原件中登记。原件变化时重读当前计划。丢失响应时先查回写
+结果，勿再次终止实例。该入口核对当前状态、精确 ID 和证据原字节，宿主的实际终态
+仍来自 PM 核实的原生回执。
+
+三端在同一请求实例回收后，以 `cleanup-scratch --pm-id <当前PM> --request-id <请求>`
+预览和清理能够回收的临时文件。保持原登记、会话历史、必要日志和验收依据，由
+[现有快照入口](runtime-records.md#allocate-and-clean-up-the-task-scratch-workspace)复核具体保留与删除范围。

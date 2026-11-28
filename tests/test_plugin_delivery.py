@@ -314,7 +314,11 @@ class PluginDeliveryTest(unittest.TestCase):
     def test_codex_hooks_package_entry_and_result_closeout_under_native_trust(self):
         root = self.installed["codex"]
         hook = json.loads((root / "hooks/hooks.json").read_bytes())
-        self.assertEqual({"SessionStart", "Stop"}, set(hook["hooks"]))
+        self.assertEqual({"SessionStart", "PreToolUse", "Stop"}, set(hook["hooks"]))
+        pre = hook["hooks"]["PreToolUse"][0]
+        self.assertRegex("Bash", pre["matcher"])
+        self.assertRegex("apply_patch", pre["matcher"])
+        self.assertIn("${PLUGIN_ROOT}/hooks/write_guard.py", pre["hooks"][0]["command"])
         self.assertNotIn("fork", hook["hooks"]["SessionStart"][0]["matcher"])
         handler, = hook["hooks"]["Stop"][0]["hooks"]
         self.assertEqual("command", handler["type"])

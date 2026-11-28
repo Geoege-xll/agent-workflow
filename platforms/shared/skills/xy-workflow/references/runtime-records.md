@@ -604,14 +604,21 @@ bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/sou
   --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}"
 ```
 
+For registered request closeout, include `--pm-id <host>:<current-native-PM-id>` in both calls.
+The helper revalidates current request acceptance, the original native instances' recorded terminal
+observations and the registered originals. The preview automatically retains original records and
+current, explicitly referenced scratch evidence, including native observation evidence and preservation manifests. Supply
+explicit `--keep` values for additional evidence and references held outside the task records.
+Keep the registration through cleanup, and continue to preserve native history and accepted work.
+
 `cleanup-scratch` requires a read-only preview before execution with the same target and retained items:
 
 ```bash
 bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py cleanup-scratch \
-  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}" --dry-run
+  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}" --pm-id "${pm_id:?set actual PM identity}" --dry-run
 # 核对归属、使用和引用后，将预览返回的 snapshot_sha256 设为 scratch_snapshot_sha256。
 bash "<plugin-root>/lib/python_runtime.sh" -B -X utf8 "<plugin-root>/plugins/source_pack.py" helper --project "<absolute-project>" lib/task_graph_cli.py cleanup-scratch \
-  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}" \
+  --root "${project_root:?set actual project root}" --request-id "${request_id:?set request id}" --pm-id "${pm_id:?set actual PM identity}" \
   --expect-sha256 "${scratch_snapshot_sha256:?use the reviewed preview snapshot SHA}"
 ```
 

@@ -62,7 +62,7 @@ codex plugin add xy-workflow@xy-workflow
 codex plugin list --json
 ```
 
-安装后在官方 `/hooks` 中审阅并信任当前 SessionStart（主会话入口）和 Stop（登记结果任务的收尾提示），再开始新会话。安装或启用不授予 Hook 信任，不直接写 trust 记录，不以全局或项目指令文件替代官方审阅。Codex 包保留单一 `.codex-plugin/plugin.json` 清单，避免已发现的 portable 根清单漏载 Hook 问题。停用 Hook 或尚未信任 Stop 时，PM 仍可通过原生完成结果与任务池核对结果。详见 [Codex Hook 审阅规则](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)。
+安装后在官方 `/hooks` 中审阅并信任当前 SessionStart（主会话入口）、PreToolUse（受管项目写入分工）和 Stop（登记结果任务的收尾提示），再开始新会话。安装或启用不授予 Hook 信任，不直接写 trust 记录，不以全局或项目指令文件替代官方审阅。Codex 包保留单一 `.codex-plugin/plugin.json` 清单，避免已发现的 portable 根清单漏载 Hook 问题。停用 Hook 或尚未信任 Stop 时，PM 仍可通过原生完成结果与任务池核对结果。详见 [Codex Hook 审阅规则](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)。
 
 ## Claude Code
 

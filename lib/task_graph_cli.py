@@ -451,7 +451,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, help="explicit new graph or task-pack output; never created by default")
     parser.add_argument("--root", type=Path, help="explicit root for initialization, selected file fingerprints or scratch workspace")
     parser.add_argument("--select", action="append", default=[], help="select an existing receipt fingerprint-map field")
-    parser.add_argument("--pm-id", help="仅独立原型 task 导出：已登记原件的实际 PM 身份")
+    parser.add_argument("--pm-id", help="独立原型 task 导出或请求清理：已登记原件的实际 PM 身份")
     parser.add_argument("--check-command", help="仅 fingerprints 使用：核对当前单包中这条命令声明的文件输入")
     parser.add_argument("--request-id", help="request identifier for deterministic scratch workspace allocation/cleanup")
     parser.add_argument("--all", action="store_true", help="clean all managed scratch workspaces for the project root")
@@ -2228,8 +2228,8 @@ def _verify_ui_scope(pack: dict[str, Any], source: dict[str, Any]) -> None:
 def main() -> int:
     args = _parser().parse_args()
     try:
-        if args.pm_id is not None and args.command != "task":
-            raise TaskGraphError("--pm-id applies only to standalone prototype task export")
+        if args.pm_id is not None and args.command not in {"task", "cleanup-scratch"}:
+            raise TaskGraphError("--pm-id applies only to standalone prototype task export and request cleanup")
         if args.check_command is not None and (args.command != "fingerprints" or not args.check_command.strip()):
             raise TaskGraphError("--check-command requires fingerprints and an exact nonempty command")
         if args.claude_event and (args.command != "continuation" or args.host != "claude"):
@@ -2365,7 +2365,7 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "cleanup-scratch":
         if args.root is None or any((args.input, args.patch, args.task_id, args.output, args.select)):
             raise TaskGraphError("cleanup-scratch requires --root and accepts --request-id/--all, --dry-run, --keep and --expect-sha256")
-        if host == "antigravity" and not args.dry_run and args.all != bool(args.request_id):
+        if host == "antigravity" and not args.pm_id and not args.dry_run and args.all != bool(args.request_id):
             from lib.hosts.handoff import validated_scratch_slot
             from lib.task_pool import require_registered_scratch_keeps
             slot = None if args.all else validated_scratch_slot(args.request_id)
@@ -2373,6 +2373,13 @@ def _record_command(args: argparse.Namespace) -> dict[str, Any]:
             target = base if slot is None else base / slot
             require_registered_scratch_keeps(args.root, target, records._scratch_keep_paths(tuple(args.keep)))
         try:
+            if args.pm_id is not None:
+                if args.all or not args.request_id:
+                    raise TaskGraphError("registered request cleanup requires the exact --request-id")
+                from lib.task_pool import cleanup_request
+                return cleanup_request(args.root, args.pm_id, args.request_id, dry_run=args.dry_run,
+                                       keep=tuple(args.keep), expected=args.expect_sha256,
+                                       handoff=handoff, installed=host)
             return records.cleanup_scratch(args.root, args.request_id, remove_all=args.all,
                                            dry_run=args.dry_run, keep=tuple(args.keep), expected=args.expect_sha256,
                                            handoff=handoff)

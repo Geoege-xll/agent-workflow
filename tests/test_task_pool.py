@@ -84,6 +84,13 @@ class TaskPoolTest(unittest.TestCase):
                           "--task-id", task_id or path.stem, "--expect-sha256", sha or self.sha(path), *self.capacity],
                          expect=expect)
 
+    def test_full_closeout_requires_the_current_unique_qa(self):
+        completed = self.record("full", level="Full", state="BUILD_VERIFIED")
+        self.reg(completed)
+        result = self.call(["closeout", "--request-id", "full"])
+        self.assertEqual(("blocked", "unique_request_qa_required", []),
+                         (result["status"], result["reason"], result["targets"]))
+
     def test_recovery_query_isolation_and_wholly_terminal_archive(self):
         a = self.record("shipping", request="order", level="Full")
         b = self.record("returns", request="order", state="FAILED")
