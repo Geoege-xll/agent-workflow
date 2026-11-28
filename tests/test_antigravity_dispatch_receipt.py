@@ -8,6 +8,7 @@ from unittest import mock
 
 from lib.hosts import antigravity_dispatch
 from lib.task_graph import TaskGraphError
+from tests.test_task_graph_records import graph
 
 
 class AntigravityDispatchReceiptTests(unittest.TestCase):
@@ -17,13 +18,21 @@ class AntigravityDispatchReceiptTests(unittest.TestCase):
         self.enterContext(mock.patch.object(antigravity_dispatch, "_brain_roots", return_value=(self.app, self.cli)))
         self.parent = "10000000-0000-4000-8000-000000000001"
         self.child = "20000000-0000-4000-8000-000000000002"
-        self.marker = "XY-WORKFLOW-CLAIM " + "1" * 64
-        self.role = "xy-backend"
-        self.prompt = (
-            f"{self.marker}\nXY-WORKFLOW-TASK-PACK-V1\n"
-            "Use this complete current Task Pack as your assignment. Limit writes to its owned_paths.\n"
-            '{"schema_version":2,"task":{"role":"xy-backend"}}'
-        )
+        self.workspace.mkdir()
+        self.pm_id = "antigravity:" + self.parent
+        self.policy = antigravity_dispatch.AntigravityDispatch(self.pm_id)
+        self.record = self.workspace / "graph.json"
+        self.graph = graph()
+        self.task = self.graph["tasks"][0]
+        self.task["state"] = "RUNNING"
+        self.role = self.task["role"]
+        self.target = {"record": str(self.record), "request_id": self.task["request_id"], "task_id": self.task["id"]}
+        basis = "1" * 64
+        claim, self.claim_receipt = self.policy.claim_fields(self.workspace, self.target, basis)
+        self.task.update(claim, claim_basis_sha256=basis, claim_prior_state="READY")
+        self.record.write_text(json.dumps(self.graph), encoding="utf-8")
+        self.marker = self.claim_receipt["dispatch_marker"]
+        self.prompt = antigravity_dispatch.initial_prompt(self.workspace, self.target, self.marker)
         self.focus = {"name": "update_focus", "args": {"focus": "派发实现任务"}}
         self.creation = {"name": "invoke_subagent", "args": {
             "Prompt": self.prompt, "Role": "Backend engineer", "TypeName": self.role,
@@ -57,7 +66,15 @@ class AntigravityDispatchReceiptTests(unittest.TestCase):
     def verify(self, *, expected_prompt=True):
         antigravity_dispatch.verify_creation(
             self.parent, self.child, self.workspace, self.marker, self.role,
-            expected_prompt=(lambda: self.prompt) if expected_prompt else None,
+            expected_prompt=(lambda: self.prompt) if expected_prompt else None, expected_task=self.target,
+        )
+
+    def check_binding(self, task, prompt):
+        create = {**self.creation, "args": {**self.creation["args"], "Prompt": prompt}}
+        self.write(self.app, {**self.plan, "tool_calls": [self.focus, create]}, self.ack, self.receipt(self.app))
+        self.policy.check_binding(
+            self.workspace, self.target, task, self.claim_receipt,
+            {"host": "antigravity", "agent_id": self.child}, lambda: self.workspace,
         )
 
     def test_app_focus_then_create_accepts_adjacent_ack_and_receipt(self):
@@ -83,3 +100,19 @@ class AntigravityDispatchReceiptTests(unittest.TestCase):
         self.write(self.cli, self.plan, self.ack, self.receipt(self.cli))
         with self.assertRaisesRegex(TaskGraphError, "no matching native"):
             self.verify()
+
+    def test_binding_a_revised_withdrawal_requires_the_original_pack_identity(self):
+        header, data = self.prompt.rsplit("\n", 1)
+        original = json.loads(data)
+        stopped = {**self.task, "state": "STOP_REQUESTED", "goal": "Revised scope",
+                   "task_revision": 1, "revision_source": "user:revision"}
+        self.graph["tasks"] = [stopped]
+        self.record.write_text(json.dumps(self.graph), encoding="utf-8")
+        self.check_binding(stopped, self.prompt)
+        for field in ("id", "request_id", "role"):
+            with self.subTest(field=field), self.assertRaisesRegex(TaskGraphError, "no matching native"):
+                candidate = {**original, "task": {**original["task"], field: "different"}}
+                body = json.dumps(candidate, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+                self.check_binding(stopped, f"{header}\n{body}")
+        with self.assertRaisesRegex(TaskGraphError, "no matching native"):
+            self.check_binding(stopped, header + "\n{")

@@ -181,7 +181,30 @@ def _focus_update(call, *, full: bool) -> bool:
     return isinstance(focus, str) and 0 < len(focus) <= 512 and bool(focus.strip()) and focus.isprintable()
 
 
-def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool, expected_prompt) -> tuple[int, int] | None:
+def _historical_focus_prompt(prompt: str, header: str, role: str, expected_task: dict | None) -> str | None:
+    if expected_task is None:
+        return None
+    from lib.task_graph_cli import pack_snapshot
+    from lib.task_graph_records import decode
+
+    body = prompt[len(header):].partition("\n")[0]
+    try:
+        pack = decode(body)
+        if not isinstance(pack, dict):
+            return None
+        pack_snapshot(pack)
+        canonical = json.dumps(pack, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    task = pack["task"]
+    if (body != canonical or task.get("state") not in ("RUNNING", "QA") or task.get("role") != role
+            or task.get("id") != expected_task["task_id"] or task.get("request_id") != expected_task["request_id"]):
+        return None
+    return header + body
+
+
+def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool,
+                   expected_prompt, expected_task: dict | None) -> tuple[int, int] | None:
     calls = event.get("tool_calls")
     if (event.get("type") != "PLANNER_RESPONSE" or not isinstance(calls, list) or not 1 <= len(calls) <= 3
             or not _field_complete(event, "tool_calls")):
@@ -216,10 +239,17 @@ def _dispatch_step(event: dict, marker: str, role: str, *, full: bool, app: bool
     # 完整日志的参数是直接字符串。两个来源各按自己的格式读，禁止混用或猜测解码。
     if not isinstance(prompt, str) or not isinstance(selector, str):
         return None
-    # 绑定后按原子会话和标记重放回执，原任务包可能已更新。只接受可识别的当前格式，
-    # 首次绑定仍由 _matches_prompt 核对完整的原生派发提示。
-    if focus_only and not prompt.startswith(f"{marker}\n{_PACK_MARKER}\n{_PACK_INSTRUCTION}\n{{"):
-        return None
+    if focus_only:
+        header = f"{marker}\n{_PACK_MARKER}\n{_PACK_INSTRUCTION}\n"
+        if not prompt.startswith(header):
+            return None
+        if expected_prompt is None:
+            # 已绑定或撤回后原包可能已修订。只使用原生提示中的规范化任务包及原领取的
+            # 稳定身份核对旧回执，不以当前任务目标或范围倒推历史派发内容。
+            original = _historical_focus_prompt(prompt, header, role, expected_task)
+            if original is None:
+                return None
+            expected_prompt = lambda: original
     if not _matches_prompt(selector, role, prompt, marker, expected_prompt):
         return None
     return event["step_index"] + 1, updates
@@ -253,7 +283,7 @@ def _parent_transcript(directory: Path):
 
 
 def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, role: str, *,
-                    brain: Path | None = None, expected_prompt=None) -> None:
+                    brain: Path | None = None, expected_prompt=None, expected_task: dict | None = None) -> None:
     from lib.skills.role_skills import ROLE_SKILLS
     if role not in ROLE_SKILLS:
         raise TaskGraphError("AGY dispatch requires a role defined by the current workflow package")
@@ -310,7 +340,7 @@ def verify_creation(parent: str, agent_id: str, workspace: Path, marker: str, ro
                     if not remaining_updates and _matches_receipt(event["content"], agent_id, child_log, workspace):
                         return
                 pending = _dispatch_step(event, marker, role, full=full, app=root == app_root,
-                                         expected_prompt=expected_prompt)
+                                         expected_prompt=expected_prompt, expected_task=expected_task)
     except TaskGraphError:
         raise
     except (OSError, ValueError) as exc:
@@ -430,7 +460,8 @@ class AntigravityDispatch(DispatchPolicy):
             expected_prompt = None
             # A withdrawal may follow an unbound revision. Bind the proven original
             # child so the PM can stop it, without reauthorizing implementation.
-            if task["state"] != "STOP_REQUESTED" and claim.get("prompt_format") == AGY_TASK_PACK_PROMPT:
+            modern_claim = claim.get("prompt_format") == AGY_TASK_PACK_PROMPT
+            if task["state"] != "STOP_REQUESTED" and modern_claim:
                 expected_prompt = lambda: initial_prompt(root, target, marker)
             verify_creation(parent, reference["agent_id"], execution_root(), marker, task["role"],
-                            expected_prompt=expected_prompt)
+                            expected_prompt=expected_prompt, expected_task=target if modern_claim else None)
