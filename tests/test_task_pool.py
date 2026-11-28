@@ -84,6 +84,141 @@ class TaskPoolTest(unittest.TestCase):
                           "--task-id", task_id or path.stem, "--expect-sha256", sha or self.sha(path), *self.capacity],
                          expect=expect)
 
+    def graph_call(self, *args, code=0, patch=None):
+        result = subprocess.run(
+            [sys.executable, "-B", str(PACK / "lib/task_graph_cli.py"), *args, "--root", str(self.root)],
+            cwd=self.root, env=self.env, capture_output=True, text=True, check=False,
+            input=json.dumps(patch) if patch is not None else None,
+        )
+        self.assertEqual(code, result.returncode, result.stderr or result.stdout)
+        return json.loads(result.stdout if code == 0 else result.stderr)
+
+    def test_legacy_cleanup_blocks_registered_request_even_with_original_outside_scratch(self):
+        request = "protected"
+        self.reg(self.record("registered", request=request))
+        folder = Path(self.graph_call("scratch", "--request-id", request)["scratch_dir"])
+        evidence = folder / "only-deliverable.log"
+        evidence.write_text("in-use evidence")
+        for select in (("--request-id", request), ("--all",)):
+            with self.subTest(select=select):
+                error = self.graph_call("cleanup-scratch", *select, "--dry-run", code=2)
+                self.assertIn("registered", error["error"])
+                self.assertTrue(evidence.is_file())
+        ordinary = Path(self.graph_call("scratch", "--request-id", "ordinary")["scratch_dir"])
+        (ordinary / "disposable.txt").write_text("unreferenced file")
+        scan = self.graph_call("cleanup-scratch", "--request-id", "ordinary", "--dry-run")
+        self.graph_call("cleanup-scratch", "--request-id", "ordinary", "--expect-sha256", scan["snapshot_sha256"])
+        self.assertFalse(ordinary.exists())
+        self.assertTrue(evidence.is_file())
+
+    def test_cleanup_barrier_excludes_cross_pm_registration_and_original_update(self):
+        from lib.hosts.handoff import SYSTEM_HANDOFF
+
+        request = "closing"
+        selected = self.record("done", request=request, state="BUILD_VERIFIED")
+        # 核对项目根中的原件可复用登记屏障，无需再次取得同一 inode 锁。
+        in_root = self.root / selected.name
+        selected.rename(in_root)
+        self.reg(in_root)
+        peer_dir = self.work / "peer"
+        peer_dir.mkdir()
+        peer_record = self.record("peer")
+        peer = peer_dir / peer_record.name
+        peer_record.rename(peer)
+        self.call(["register", "--record", str(peer), "--expect-sha256", self.sha(peer)], pm="codex:other")
+        untouched = peer.read_bytes()
+        newcomer_dir = self.work / "newcomer"
+        newcomer_dir.mkdir()
+        new_record = self.record("new", request=request)
+        newcomer = newcomer_dir / new_record.name
+        new_record.rename(newcomer)
+        folder = Path(self.graph_call("scratch", "--request-id", request)["scratch_dir"])
+        artifact = folder / "temporary.log"
+        artifact.write_text("temporary")
+        cleanup = ("cleanup-scratch", "--pm-id", self.pm, "--request-id", request)
+        preview = self.graph_call(*cleanup, "--dry-run")
+        original_cleanup = task_graph_records.cleanup_scratch
+        competing_registration = ["register", "--record", str(newcomer), "--expect-sha256", self.sha(newcomer)]
+
+        def race(*args, **kwargs):
+            # 真实独立进程在引用核对之后、第一次删除之前，分别尝试加入新请求原件和改旧原件。
+            denied = self.call(competing_registration, pm="codex:newcomer", expect=2)
+            self.assertIn("Resource temporarily unavailable", denied["error"])
+            denied = self.graph_call("update", "--input", str(peer), "--expect-sha256", self.sha(peer), "--patch", "-",
+                                     patch={"tasks": {"peer": {"append": {"acceptance_evidence": [str(artifact)]}}}},
+                                     code=2)
+            self.assertIn("record directory is busy", denied["error"])
+            return original_cleanup(*args, **kwargs)
+
+        with mock.patch.object(tempfile, "tempdir", str(self.work)):
+            with mock.patch.object(task_graph_records, "cleanup_scratch", side_effect=race):
+                outcome = task_pool.cleanup_request(self.root, self.pm, request, dry_run=False, keep=(),
+                                                   expected=preview["snapshot_sha256"], handoff=SYSTEM_HANDOFF)
+        self.assertEqual("applied", outcome["status"])
+        self.assertEqual(untouched, peer.read_bytes())
+        self.assertFalse(artifact.exists())
+        self.assertEqual("registered", self.call(competing_registration, pm="codex:newcomer")["status"])
+
+    def test_two_full_closeouts_preserve_current_qa_contract_and_allow_cleanup(self):
+        from lib.foundation_qa import current_request_receipt
+        from lib.solution_confirmation import bind_decisions, decision_gates
+        from tests.test_foundation_qa import FoundationQATest
+
+        fixture = FoundationQATest()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.root = fixture.root
+        source = fixture.ordinary_source()
+        writer = source["tasks"][0]
+        writer["agent_ref"] = {"host": "codex", "agent_id": "writer-foundation"}
+        writer["solution_decisions"] = [{"id": "route", "content": "使用现有分页入口"}]
+        bind_decisions(writer)
+        gate = decision_gates(writer)["route"]
+        source["approved_gates"].append(gate)
+        source["solution_approval_sources"] = {gate: "user:fixture-current-decision"}
+        source = fixture.start(fixture.freeze(source))
+        _, _, refs = fixture.evidence(source, "before-closeout")
+        source = fixture.update(source, "qa", {"accept_request": refs})
+        self.assertTrue(current_request_receipt(source, source["tasks"][2], root=self.root))
+        request = source["tasks"][2]["request_id"]
+        folder = Path(self.graph_call("scratch", "--request-id", request)["scratch_dir"])
+        original, delivered, unused, manifest, terminal = (
+            folder / name for name in ("graph.json", "result.log", "regenerable.txt", "proof.json", "terminal.json")
+        )
+        self.write(original, source)
+        delivered.write_text("verified result and observed native closure")
+        unused.write_text("regenerable artifact")
+        evidence = {"path": str(delivered), "sha256": self.sha(delivered)}
+        self.write(manifest, [evidence])
+        self.reg(original)
+        for task_id in (source["tasks"][0]["id"], "qa"):
+            plan = self.call(["closeout", "--request-id", request, "--preservation", str(manifest)])
+            self.assertEqual("ready", plan["status"], plan.get("reason"))
+            selected = next(target for target in plan["targets"] if target["task_id"] == task_id)
+            self.write(terminal, {"schema_version": 1, "agent_ref": selected["agent_ref"], "outcome": "closed",
+                                  "native_evidence": evidence, "preservation": plan["preservation"]})
+            result = self.call(["finish-closeout", "--request-id", request, "--task-id", task_id,
+                                "--record", str(original), "--expect-sha256", selected["sha256"],
+                                "--evidence", str(terminal)])
+            self.assertEqual("closed", result["status"])
+            reached = json.loads(original.read_bytes())
+            self.assertEqual({gate: "user:fixture-current-decision"}, reached["solution_approval_sources"])
+            self.assertEqual(refs["handoff"], reached["tasks"][2]["request_receipt"]["handoff"])
+            self.assertTrue(current_request_receipt(reached, reached["tasks"][2], root=self.root))
+            self.assertEqual([task.get("acceptance_evidence") for task in source["tasks"]],
+                             [task.get("acceptance_evidence") for task in reached["tasks"]])
+        cleanup = ("cleanup-scratch", "--pm-id", self.pm, "--request-id", request)
+        scan = self.graph_call(*cleanup, "--dry-run")
+        self.graph_call(*cleanup, "--expect-sha256", scan["snapshot_sha256"])
+        self.assertFalse(unused.exists())
+        self.assertTrue(original.is_file() and delivered.is_file() and manifest.is_file())
+        after_cleanup = json.loads(original.read_bytes())
+        self.assertTrue(current_request_receipt(after_cleanup, after_cleanup["tasks"][2], root=self.root))
+        self.assertEqual("ready", self.call(["closeout", "--request-id", request])["status"])
+        revised = fixture.update(reached, source["tasks"][0]["id"],
+                                 {"append": {"acceptance_evidence": ["changed business evidence"]}})
+        self.assertFalse(current_request_receipt(revised, revised["tasks"][2], root=self.root))
+
     def test_full_closeout_requires_the_current_unique_qa(self):
         completed = self.record("full", level="Full", state="BUILD_VERIFIED")
         self.reg(completed)

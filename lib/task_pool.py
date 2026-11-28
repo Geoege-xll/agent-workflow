@@ -118,8 +118,8 @@ def _initialize_index(file: Path, pools: int, scope: dict) -> bool:
 def _index(root: Path, pm_id: str, *, create: bool):
     """按项目物理路径和显式 PM 身份定位，不从目录枚举会话或读取任何宿主历史。
 
-    锁顺序固定为池目录、再到既有项目准入锁或单一原记录的发布锁；锁内只做
-    本地读写和现有校验。进程退出即解除协作锁，磁盘不保存占位、容量或运行态。
+    锁顺序固定为 PM 槽，再到项目登记屏障（如适用），最后是原件发布锁。
+    锁内只做本地读写和现有校验。退出即解除协作锁，无额外占位或持久运行态。
     """
     validate_task_source({}, root=root)
     _text(pm_id, "pm-id", 256)
@@ -149,16 +149,16 @@ def _index(root: Path, pm_id: str, *, create: bool):
         yield file, data
 
 
-def registered_record_paths(root: Path) -> frozenset[Path]:
-    """只为路径保护读取同一项目现有的原件定位，包括其它 PM 的登记。"""
+def _registered_inventory(root: Path) -> dict[Path, set[str]]:
+    """从现有索引读取同一项目所有 PM 中的原件定位及请求归属。"""
     root = dispatch._project_directory(str(root))
     base = project_scratch_base(root)
-    found = set()
+    found: dict[Path, set[str]] = {}
     with ExitStack() as stack:
         try:
             pools = stack.enter_context(_pool_directory(base, create=False))
         except FileNotFoundError:
-            return frozenset()
+            return found
         # 索引采用原子替换。这里只读取已有定位，不核对原件状态、不新建池，
         # 也不持有另一个 PM 的锁去等待文件工具。损坏或缺失的既有索引必须拒绝。
         for key in os.listdir(pools):
@@ -169,19 +169,24 @@ def registered_record_paths(root: Path) -> frozenset[Path]:
                 data = _read_index(base / "task-pools" / key / "index.json", _index_scope(root, key))
                 if data is None:
                     raise MissingPoolIndex("missing task pool index in existing PM slot; restore the registered inventory")
-                found.update(Path(path) for path in data["records"])
-    return frozenset(found)
+                for path, entry in data["records"].items():
+                    found.setdefault(Path(path), set()).update(member["request"] for member in entry["members"].values())
+    return found
 
 
-def require_registered_scratch_keeps(root: Path, target: Path, keep: tuple[str, ...]) -> None:
-    """保留清理范围内仍登记的原件，完成归档后由原来的清理规则决定。"""
+def registered_record_paths(root: Path) -> frozenset[Path]:
+    return frozenset(_registered_inventory(root))
+
+
+def require_registered_scratch_keeps(target: Path, keep: tuple[str, ...], originals) -> None:
+    """物理身份比对补足 macOS 等文件系统上的原件路径别名保护。"""
     try:
         scope = target.stat()
     except FileNotFoundError:
         return
     depth = len(target.parts)
     kept = {target / relative for relative in keep}
-    for original in registered_record_paths(root):
+    for original in originals:
         if len(original.parts) <= depth:
             continue
         parent = Path(*original.parts[:depth])
@@ -209,6 +214,21 @@ def require_registered_scratch_keeps(root: Path, target: Path, keep: tuple[str, 
                 raise TaskGraphError("scratch cleanup requires --keep for every registered task original in this request")
         else:
             raise TaskGraphError("scratch cleanup requires --keep for every registered task original in this request")
+
+
+def _record_directories(root, originals):
+    # 项目根的 inode 已作为登记屏障；原件位于项目根时不能再次取得同一把锁。
+    return {path.parent for path in originals if not path.parent.samefile(root)}
+
+
+@contextmanager
+def _cleanup_inventory(root):
+    """锁住登记集合及原件引用，直至预览或实际删除完成。"""
+    # 项目根始终存在，即使任务池尚未创建，也能与首次 register 协调。
+    with directory_lock(root, "project-task-pool-inventory"):
+        registered = _registered_inventory(root)
+        with solutions._locked_directories(_record_directories(root, registered)):
+            yield registered
 
 
 def _save(file: Path, data: dict) -> None:
@@ -317,7 +337,7 @@ def register(root: Path, pm_id: str, path: str, expected: str, title: str | None
         required = set(task.get("gates", [])) | set(solutions.decision_keys(task).values())
         if required - snap.approved_gates:
             raise TaskGraphError("dispatch target requires current approvals before registration")
-    with _index(root, pm_id, create=True) as (file, data):
+    with _index(root, pm_id, create=True) as (file, data), directory_lock(root, "project-task-pool-inventory"):
         entries = data["records"]
         if path in entries:
             _check_binding(entries[path], snap, extend=True)
@@ -333,7 +353,7 @@ def register(root: Path, pm_id: str, path: str, expected: str, title: str | None
         entry = {**entries.get(path, {}), **snap.binding,
                  "title": title if title is not None else entries.get(path, {}).get("title")}
         # 登记 CAS 与原件发布共用其父目录锁；旧观察在拿锁之前失效时，不发布登记。
-        with records._publication_lock(Path(path)):
+        with solutions._locked_directories(_record_directories(root, (Path(path),))):
             if records.digest(records.read_record(Path(path))) != expected:
                 raise TaskGraphError("record fingerprint changed during registration")
             if entries.get(path) != entry:
@@ -376,7 +396,7 @@ def _archive_peers(root: Path, entries: dict, target: Snapshot) -> list[Snapshot
 
 
 def archive(root: Path, pm_id: str, path: str, expected: str) -> dict:
-    with _index(root, pm_id, create=False) as (file, data):
+    with _index(root, pm_id, create=False) as (file, data), directory_lock(root, "project-task-pool-inventory"):
         entry = _require_entry(data["records"], path)
         snap = _snapshot(root, path, expected)
         _check_binding(entry, snap)
@@ -385,7 +405,7 @@ def archive(root: Path, pm_id: str, path: str, expected: str) -> dict:
         # 归档只删除本条索引，不改原图、不删工作成果。紧贴发布时重核 SHA，
         # 避免在终态判断之后、有新修订写入时把仍需跟踪的记录丢掉。
         checked = [snap, *_archive_peers(root, data["records"], snap)]
-        with solutions._locked_directories({Path(item.descriptor["path"]).parent for item in checked}):
+        with solutions._locked_directories(_record_directories(root, (Path(item.descriptor["path"]) for item in checked))):
             for item in checked:
                 original = Path(item.descriptor["path"])
                 if records.digest(records.read_record(original)) != item.descriptor["sha256"]:
@@ -505,12 +525,37 @@ def finish_closeout(root, pm_id, target, expected, observation, *, installed=Non
         if Path(receipt["native_evidence"]["path"]).samefile(path):
             raise TaskGraphError("native closeout evidence must be independent from the task original")
         body = records.read_record(path)
-        line = task_closeout.PREFIX + json.dumps(receipt, ensure_ascii=False, sort_keys=True)
-        patch = {"tasks": {target["task_id"]: {"set": {"agent_retired": True},
-                                             "append": {"acceptance_evidence": [line]}}}}
-        updated = publish_task_update(path, root, records.decode(body), body, expected, patch, pool_operation=True)
+        patch = {"tasks": {target["task_id"]: {"set": {"agent_retired": True}}}}
+        updated = publish_task_update(path, root, records.decode(body), body, expected, patch,
+                                      pool_operation=True, native_closeout=(target["task_id"], receipt))
         return {**updated, "status": receipt["outcome"], "agent_ref": matching[0]["agent_ref"],
                 "agent_retired": True}
+
+
+def _cleanup_originals(registered):
+    return [(path, records.decode(records.read_record(path))) for path in sorted(registered)]
+
+
+def cleanup_unregistered(root, request_id, *, remove_all, dry_run, keep, expected, handoff):
+    """旧入口继续处理未登记资源；不能代替已登记请求的正式验收及保全。"""
+    from lib import task_closeout
+    from lib.hosts.handoff import validated_scratch_slot
+
+    if remove_all and request_id is not None:
+        raise TaskGraphError("cleanup-scratch accepts either --request-id or --all, not both")
+    if not remove_all and request_id is None:
+        raise TaskGraphError("cleanup-scratch requires --request-id <id> or --all")
+    with _cleanup_inventory(root) as registered:
+        if remove_all and registered or any(request_id in requests for requests in registered.values()):
+            raise TaskGraphError("registered request scratch cleanup requires its exact --request-id and --pm-id")
+        if not remove_all and registered:
+            slot = validated_scratch_slot(request_id)
+            target = handoff.cleanup_base(root, slot) / slot
+            if task_closeout.keep_scratch(target, _cleanup_originals(registered), ()):
+                raise TaskGraphError("scratch is referenced by a registered task original")
+            require_registered_scratch_keeps(target, (), registered)
+        return records.cleanup_scratch(root, request_id, remove_all=remove_all, dry_run=dry_run,
+                                       keep=keep, expected=expected, handoff=handoff)
 
 
 def cleanup_request(root, pm_id, request_id, *, dry_run, keep, expected, handoff, installed=None):
@@ -521,29 +566,25 @@ def cleanup_request(root, pm_id, request_id, *, dry_run, keep, expected, handoff
     task_closeout.closeout_host(pm_id, installed)
     slot = validated_scratch_slot(request_id)
     target = handoff.cleanup_base(root, slot) / slot
-    with _index(root, pm_id, create=False) as (_, data):
-        registered = registered_record_paths(root)
-        with solutions._locked_directories({path.parent for path in registered}):
-            snapshots = _closeout_snapshots(root, data)
-            rows = task_closeout.request_tasks(snapshots, request_id)
-            blocker = task_closeout.accepted(root, rows)
-            if blocker:
-                raise TaskGraphError("request cannot be cleaned: " + blocker)
-            if any(task.get("agent_ref") and not task_closeout.retired(task) for _, task in rows):
-                raise TaskGraphError("request cannot be cleaned before accepted instances are retired")
-            if registered_record_paths(root) != registered:
-                raise TaskGraphError("registered records changed during cleanup preview")
-            originals = [(path, records.decode(records.read_record(path))) for path in sorted(registered)]
-            selected = {Path(snap.descriptor["path"]) for snap, _ in rows}
-            for path, source in originals:
-                requests = {task["request_id"] for task in dispatch.authoritative_tasks(source)}
-                if (path.is_relative_to(target) and (path not in selected or requests != {request_id})
-                        or request_id in requests and path not in selected):
-                    raise TaskGraphError("scratch request ownership overlaps another registered original")
-            kept = task_closeout.keep_scratch(target, originals, records._scratch_keep_paths(keep))
-            require_registered_scratch_keeps(root, target, kept)
-            return records.cleanup_scratch(root, request_id, dry_run=dry_run, keep=kept,
-                                           expected=expected, handoff=handoff)
+    with _index(root, pm_id, create=False) as (_, data), _cleanup_inventory(root) as registered:
+        snapshots = _closeout_snapshots(root, data)
+        rows = task_closeout.request_tasks(snapshots, request_id)
+        blocker = task_closeout.accepted(root, rows)
+        if blocker:
+            raise TaskGraphError("request cannot be cleaned: " + blocker)
+        if any(task.get("agent_ref") and not task_closeout.retired(snap, task) for snap, task in rows):
+            raise TaskGraphError("request cannot be cleaned before accepted instances are retired")
+        originals = _cleanup_originals(registered)
+        selected = {Path(snap.descriptor["path"]) for snap, _ in rows}
+        for path, source in originals:
+            requests = {task["request_id"] for task in dispatch.authoritative_tasks(source)}
+            if (path.is_relative_to(target) and (path not in selected or requests != {request_id})
+                    or request_id in requests and path not in selected):
+                raise TaskGraphError("scratch request ownership overlaps another registered original")
+        kept = task_closeout.keep_scratch(target, originals, records._scratch_keep_paths(keep))
+        require_registered_scratch_keeps(target, kept, registered)
+        return records.cleanup_scratch(root, request_id, dry_run=dry_run, keep=kept,
+                                       expected=expected, handoff=handoff)
 
 
 @contextmanager

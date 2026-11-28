@@ -610,6 +610,9 @@ observations and the registered originals. The preview automatically retains ori
 current, explicitly referenced scratch evidence, including native observation evidence and preservation manifests. Supply
 explicit `--keep` values for additional evidence and references held outside the task records.
 Keep the registration through cleanup, and continue to preserve native history and accepted work.
+The older cleanup route serves unregistered scratch only. The project-wide option requires an empty
+registered inventory. Both routes coordinate with project registration and authoritative record
+publication while determining references and applying the reviewed deletion.
 
 `cleanup-scratch` requires a read-only preview before execution with the same target and retained items:
 

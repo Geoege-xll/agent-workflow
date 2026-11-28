@@ -250,6 +250,7 @@ class PackagedTaskPoolTest(unittest.TestCase):
         scan = self.invoke(host, GRAPH, *command, "--dry-run")
         overlap = self.workspace / "second-original.json"
         other = json.loads(original.read_bytes())
+        other.pop("native_closeout")
         other["task"].pop("agent_ref")
         other["task"].pop("agent_retired")
         overlap.write_text(json.dumps(other))
@@ -1385,17 +1386,34 @@ class PackagedTaskPoolTest(unittest.TestCase):
             self.assertEqual(before, original.read())
         self.assertFalse((page.parent / ".xy-prototype-entry").exists())
         cleanup = ("cleanup-scratch", "--root", self.project, "--request-id", task["request_id"])
-        preview = self.host_delivery(host, pm, GRAPH, *cleanup, "--dry-run")
-        result = self.host_delivery(host, pm, GRAPH, *cleanup, "--expect-sha256", preview["snapshot_sha256"], code=2)
-        self.assertIn("registered task original", result["error"])
-        self.assertEqual(updated["sha256"], digest(record))
-        keep = ("--keep", record.name)
-        preview = self.host_delivery(host, pm, GRAPH, *cleanup, *keep, "--dry-run")
-        result = self.host_delivery(host, pm, GRAPH, *cleanup, *keep,
-                                    "--expect-sha256", preview["snapshot_sha256"])
+        result = self.host_delivery(host, pm, GRAPH, *cleanup, "--dry-run", code=2)
+        self.assertIn("registered request scratch", result["error"])
+        scoped = (*cleanup, "--pm-id", self.agy_pm)
+        result = self.host_delivery(host, pm, GRAPH, *scoped, "--dry-run", code=2)
+        self.assertIn("before accepted instances are retired", result["error"])
+
+        native_log = record.with_name("native-end.log")
+        native_log.write_text("fixture native result preserved, instance no longer reused")
+        proof = record.with_name("preserved.json")
+        evidence = {"path": str(native_log), "sha256": digest(native_log)}
+        proof.write_text(json.dumps([evidence]))
+        scope = ("--root", self.project, "--pm-id", self.agy_pm, "--request-id", task["request_id"])
+        plan = self.host_delivery(host, pm, POOL, "closeout", *scope, "--preservation", proof)
+        target, = plan["targets"]
+        terminal = record.with_name("terminal.json")
+        terminal.write_text(json.dumps({"schema_version": 1, "agent_ref": target["agent_ref"], "outcome": "retired",
+                                        "native_evidence": evidence, "preservation": plan["preservation"]}))
+        finished = self.host_delivery(host, pm, POOL, "finish-closeout", *scope, "--record", record,
+                                      "--task-id", task["id"], "--expect-sha256", target["sha256"],
+                                      "--evidence", terminal)
+        self.assertEqual("retired", finished["status"])
+        preview = self.host_delivery(host, pm, GRAPH, *scoped, "--dry-run")
+        result = self.host_delivery(host, pm, GRAPH, *scoped, "--expect-sha256", preview["snapshot_sha256"])
         self.assertEqual("applied", result["status"])
         self.assertFalse(patch.exists())
-        self.assertEqual(updated["sha256"], digest(record))
+        self.assertTrue(native_log.is_file() and proof.is_file())
+        self.assertEqual(finished["sha256"], digest(record))
+
 
     def test_codex_and_claude_packaged_prototype_delivery_serves_the_page_and_stops(self):
         from tests.test_prototype_workspace import PROTOTYPE_RELATIVE, bind_requirement_documents, write_valid_project

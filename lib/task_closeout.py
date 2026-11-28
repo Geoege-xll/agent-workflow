@@ -11,7 +11,8 @@ from lib.task_graph import TaskGraphError, delivery_complete
 from lib.task_settlement import _evidence
 
 
-PREFIX = "Native closeout receipt: "
+FIELD = "native_closeout"
+LEGACY_PREFIX = "Native closeout receipt: "
 
 
 def request_tasks(snapshots, request_id):
@@ -54,8 +55,7 @@ def closeout_host(pm_id, installed=None):
     return host, native
 
 
-def verify_evidence(item):
-    """交付物可为较大的二进制文件，复用原记录按物理路径流式计算的指纹。"""
+def evidence_path(item):
     if (not isinstance(item, dict) or set(item) != {"path", "sha256"}
             or not isinstance(item["path"], str) or not isinstance(item["sha256"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])):
@@ -63,6 +63,12 @@ def verify_evidence(item):
     path = Path(item["path"])
     if not path.is_absolute() or str(path) != item["path"] or ".." in path.parts:
         raise TaskGraphError("evidence requires a canonical absolute path")
+    return path
+
+
+def verify_evidence(item):
+    """交付物可为较大的二进制文件，复用原记录按物理路径流式计算的指纹。"""
+    path = evidence_path(item)
     anchor = Path(path.anchor)
     if records.file_digest(anchor, path.relative_to(anchor).as_posix()) != item["sha256"]:
         raise TaskGraphError("evidence fingerprint changed")
@@ -87,18 +93,26 @@ def preservation(path, rows):
     return {"path": str(path), "sha256": records.digest(body)}
 
 
-def retired(task):
-    reference = task.get("agent_ref")
-    if not reference or not task.get("agent_retired"):
+def validate_metadata(payload, tasks):
+    """终态记录属于原件运行元数据，不进入 Writer/Reviewer 的已审任务字段。"""
+    receipts = payload.get(FIELD)
+    if not isinstance(receipts, dict) or not receipts:
+        raise TaskGraphError("native closeout metadata must contain original task receipts")
+    indexed = {task.get("id"): task for task in tasks}
+    for identifier, receipt in receipts.items():
+        task = indexed.get(identifier)
+        if task is None or task.get("agent_retired") is not True or not task.get("agent_ref"):
+            raise TaskGraphError("native closeout metadata requires its exact retired original task")
+        terminal_shape(receipt, task["agent_ref"])
+
+
+def retired(snapshot, task):
+    receipt = snapshot.source.get(FIELD, {}).get(task["id"])
+    if receipt is None:
         return False
-    for line in reversed(task.get("acceptance_evidence", [])):
-        if not line.startswith(PREFIX):
-            continue
-        receipt = records.decode(line[len(PREFIX):].encode())
-        terminal(receipt, reference, receipt["preservation"])
-        _evidence(receipt["preservation"], records.read_record, "preservation receipt")
-        return True
-    return False
+    terminal(receipt, task["agent_ref"], receipt["preservation"])
+    _evidence(receipt["preservation"], records.read_record, "preservation receipt")
+    return True
 
 
 def plan(root, pm_id, snapshots, request_id, proof, *, installed=None):
@@ -113,7 +127,7 @@ def plan(root, pm_id, snapshots, request_id, proof, *, installed=None):
     if not blocked:
         for snap, task in rows:
             ref = task.get("agent_ref")
-            if not ref or retired(task):
+            if not ref or retired(snap, task):
                 continue
             if ref["host"] != host:
                 blocked = "foreign_native_identity"
@@ -130,15 +144,22 @@ def plan(root, pm_id, snapshots, request_id, proof, *, installed=None):
             "reason": blocked, "targets": [] if blocked else targets, "preservation": saved}
 
 
-def terminal(receipt, reference, proof):
-    """匹配 PM 已核对的原生回执定位。宿主操作、能力及结果本身仍由当前 PM 核对。"""
+def terminal_shape(receipt, reference):
     if (not isinstance(receipt, dict)
             or set(receipt) != {"schema_version", "agent_ref", "outcome", "native_evidence", "preservation"}
             or type(receipt["schema_version"]) is not int or receipt["schema_version"] != 1
-            or receipt["agent_ref"] != reference or receipt["preservation"] != proof
-            or receipt["outcome"] not in {"closed", "stopped", "retired"}):
+            or receipt["agent_ref"] != reference or receipt["outcome"] not in ("closed", "stopped", "retired")):
         raise TaskGraphError("terminal observation must bind the exact native ID and preservation receipt")
     validate_reference(receipt["agent_ref"])
+    for key in ("native_evidence", "preservation"):
+        evidence_path(receipt[key])
+
+
+def terminal(receipt, reference, proof):
+    """匹配 PM 已核对的原生回执定位。宿主操作、能力及结果本身仍由当前 PM 核对。"""
+    terminal_shape(receipt, reference)
+    if receipt["preservation"] != proof:
+        raise TaskGraphError("terminal observation must bind the exact preservation receipt")
     verify_evidence(receipt["native_evidence"])
 
 
@@ -153,6 +174,23 @@ def _references(value):
         yield value
 
 
+def _preserved_references(source):
+    receipts = list(source.get(FIELD, {}).values())
+    # 早期候选若已写入历史证据，只保全其引用。它不作为本版的退役权威。
+    texts = []
+    for value in _references(source):
+        if value.startswith(LEGACY_PREFIX):
+            receipts.append(records.decode(value[len(LEGACY_PREFIX):].encode()))
+        else:
+            texts.append(value)
+    for receipt in receipts:
+        proof = receipt["preservation"]
+        stored = _evidence(proof, records.read_record, "preservation receipt")
+        texts.extend([receipt["native_evidence"]["path"], proof["path"]])
+        texts.extend(str(verify_evidence(item)) for item in records.decode(stored))
+    return texts
+
+
 def keep_scratch(target, originals, keeps):
     """保留全部登记原件和能从原记录解析的显式证据定位；模糊路径拒绝清理。"""
     keep = set(keeps)
@@ -160,26 +198,15 @@ def keep_scratch(target, originals, keeps):
     for path, source in originals:
         if path.is_relative_to(target):
             keep.add(path.relative_to(target).as_posix())
-        for text in _references(source):
-            if text.startswith(PREFIX):
-                receipt = records.decode(text[len(PREFIX):].encode())
-                saved = receipt["native_evidence"]
-                text_items = [saved["path"], receipt["preservation"]["path"]]
-                stored = records.read_record(Path(receipt["preservation"]["path"]))
-                if records.digest(stored) != receipt["preservation"]["sha256"]:
-                    raise TaskGraphError("preservation receipt changed before scratch cleanup")
-                text_items.extend(str(verify_evidence(item)) for item in records.decode(stored))
-            elif prefix in text:
-                text_items = [text]
-            else:
+        for item in _preserved_references(source):
+            if prefix not in item:
                 continue
-            for item in text_items:
-                if item.startswith(prefix) and Path(item).is_file():
-                    keep.add(Path(item).relative_to(target).as_posix())
-                    continue
-                for match in re.finditer(re.escape(prefix) + r'([^\n\r"\x27\x60<>;)#]+)', item):
-                    candidate = match[1].strip()
-                    if not (target / candidate).is_file():
-                        raise TaskGraphError("cannot prove a referenced scratch path is preserved")
-                    keep.add(candidate)
+            if item.startswith(prefix) and Path(item).is_file():
+                keep.add(Path(item).relative_to(target).as_posix())
+                continue
+            for match in re.finditer(re.escape(prefix) + r'([^\n\r"\x27\x60<>;)#]+)', item):
+                candidate = match[1].strip()
+                if not (target / candidate).is_file():
+                    raise TaskGraphError("cannot prove a referenced scratch path is preserved")
+                keep.add(candidate)
     return tuple(sorted(keep))

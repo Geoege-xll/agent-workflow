@@ -103,7 +103,8 @@ Full 的原 QA 任务包、handoff、`request_receipt` 和受审文档原字节�
   durable location and repair current references; a summary cannot replace the sole complete evidence.
   If transfer is impossible, retain only necessary files/ancestors, not an entire candidate for one reference.
   For scratch, follow the [record-tool preview and cleanup contract](runtime-records.md#allocate-and-clean-up-the-task-scratch-workspace):
-  preview this `request-id` read-only with the same necessary `--keep` values, then execute against its reviewed
+  preview this `request-id` read-only using the current PM ID for registered work and the same necessary
+  `--keep` values, then execute against its reviewed
   snapshot fingerprint. Recheck an invalidated snapshot; `--all` is not default closeout. Likewise reclaim only
   task-owned isolated databases, containers and rolling snapshots with proven ownership, no active use and no
   necessary references. If cleanup occurs, briefly record results/remaining limits in the original task.
@@ -144,7 +145,7 @@ delete still-referenced sole evidence.
 `outcome`、`native_evidence` 的绝对路径与 SHA 以及计划返回的 `preservation` 引用。
 通过 `lib/task_pool_cli.py finish-closeout --root <项目> --pm-id <当前PM>
 --request-id <请求> --record <原件> --task-id <任务> --expect-sha256 <计划中的原件SHA>
---evidence <终态观察.json>` 在原件中登记。原件变化时重读当前计划。丢失响应时先查回写
+--evidence <终态观察.json>` 在原件的运行元数据中登记。已审任务的验收证据和 QA 指纹保留原值。原件变化时重读当前计划。丢失响应时先查回写
 结果，勿再次终止实例。该入口核对当前状态、精确 ID 和证据原字节，宿主的实际终态
 仍来自 PM 核实的原生回执。
 
