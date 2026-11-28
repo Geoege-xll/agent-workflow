@@ -391,6 +391,7 @@ def _archive_peers(root: Path, entries: dict, target: Snapshot) -> list[Snapshot
 
 
 def archive(root: Path, pm_id: str, path: str, expected: str) -> dict:
+    from lib.task_closeout import full_qa_blocker
     with _index(root, pm_id, create=False) as (file, data), directory_lock(root, "project-task-pool-inventory"):
         entry = _require_entry(data["records"], path)
         snap = _snapshot(root, path, expected)
@@ -400,6 +401,14 @@ def archive(root: Path, pm_id: str, path: str, expected: str) -> dict:
         # 归档只删除本条索引，不改原图、不删工作成果。紧贴发布时重核 SHA，
         # 避免在终态判断之后、有新修订写入时把仍需跟踪的记录丢掉。
         checked = [snap, *_archive_peers(root, data["records"], snap)]
+        requests = {task["request_id"] for task in snap.tasks}
+        # 只限制本次要解除登记的请求。失败、撤回或未选投影的记录沿用原归档条件。
+        for item in checked:
+            for task in item.tasks:
+                if task["request_id"] in requests and task["state"] == "QA_PASSED" and task.get("qa_projection_baselines"):
+                    reason = full_qa_blocker(root, item.source, task)
+                    if reason:
+                        raise TaskGraphError(reason)
         with solutions._locked_directories(_record_directories(root, (Path(item.descriptor["path"]) for item in checked))):
             for item in checked:
                 original = Path(item.descriptor["path"])

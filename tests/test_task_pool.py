@@ -324,6 +324,74 @@ class TaskPoolTest(unittest.TestCase):
                                  {"append": {"acceptance_evidence": ["changed business evidence"]}})
         self.assertFalse(current_request_receipt(revised, revised["tasks"][2], root=self.root))
 
+    def test_registered_plan_preserves_history_and_checks_current_evidence_before_archive(self):
+        from tests.test_foundation_qa import FoundationQATest
+
+        fixture = FoundationQATest()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.root = fixture.root
+        (self.root / "project.yaml").write_bytes((PACK / "project.yaml").read_bytes())
+        name = "docs/plans/payout.md"
+        plan = self.root / name
+        plan.parent.mkdir()
+        sql = self.root / "docs/payout.sql"
+        sql.write_bytes(b"first release")
+        old_sha = self.sha(sql)
+        proof = self.root / "docs/proof.md"
+        proof.write_text("[SQL](payout.sql)\n")
+        links = "[清单][ledger] [SQL](../payout.sql) SHA256="
+        old_line = "- 验收证据: " + links + old_sha
+        original = ((PACK / "templates/docs/PLAN.md").read_text().replace("已验收版本: `none`", "已验收版本: `v1`")
+                    + "\n其它导航也会引用[清单][ledger]和[SQL](../payout.sql)。\n"
+                    + "\n## 批准依据与必要证据\n\n- 批准依据: 上轮批准\n" + old_line + "\n\n[ledger]: ../proof.md\n")
+        plan.write_text(original)
+        saved = self.work / "reviewed.md"
+        saved.write_bytes(plan.read_bytes())
+        graph = fixture.freeze(fixture.ordinary_source())
+        active = fixture.start(fixture.update(graph, "qa", {"freeze_qa_scope": {
+            "scope_ref": graph["tasks"][2]["qa_scope_ref"], "projection_paths": [name]}}))
+        _, _, refs = fixture.evidence(active, "current")
+        accepted = fixture.update(active, "qa", {"accept_request": refs})
+        record = self.work / "registered.json"
+        self.write(record, accepted)
+        self.reg(record)
+
+        def archive(code=0):
+            return self.call(["archive", "--record", str(record), "--expect-sha256", self.sha(record)], expect=code)
+
+        original_sha = self.sha(record)
+        self.assertEqual("required_plan_projection_pending", archive(2)["error"])
+        self.assertEqual(1, self.call(["view"])["registered_records"])
+        sql.write_bytes(b"second release")
+        receipt = refs["handoff"]["sha256"]
+        def project(evidence, *, history=False, code=0):
+            after = original.replace("已验收版本: `v1`", "已验收版本: `v2`").replace(old_line, "- 验收证据: " + evidence)
+            if history:
+                after = after.replace("\n## 需求与验收", "\n" + old_line + "\n\n## 需求与验收")
+            plan.write_text(after)
+            entry = {"path": name, "reviewed": {"path": str(saved), "sha256": self.sha(saved)},
+                     "projected_sha256": self.sha(plan)}
+            return self.graph_call("update", "--input", str(record), "--expect-sha256", original_sha, "--patch", "-",
+                                   patch={"tasks": {"qa": {"record_qa_projection": {
+                                       "adapter": "project.yaml", "documents": [entry]}}}}, code=code)
+
+        self.assertIn("SHA256 与链接文件的实际字节不符", project(links + old_sha + " " + receipt, code=2)["error"])
+        self.assertIn("旧验收证据链接", project(old_sha + " " + receipt, code=2)["error"])
+        proof.write_text("[SQL](missing.sql)\n")
+        current = links + self.sha(sql) + " " + receipt
+        self.assertIn("proof.md:1", project(current, history=True, code=2)["error"])
+        self.assertEqual(original_sha, self.sha(record))
+        proof.write_text("[SQL](payout.sql)\n")
+        project(current, history=True)
+        self.assertEqual(original, saved.read_text())
+        self.assertIn(old_line, plan.read_text())
+        sql.write_bytes(b"changed after projection")
+        self.assertEqual("current_request_qa_receipt_required", archive(2)["error"])
+        sql.write_bytes(b"second release")
+        self.assertEqual("archived", archive()["status"])
+        self.assertEqual(0, self.call(["view"])["registered_records"])
+
     def test_full_closeout_requires_the_current_unique_qa(self):
         completed = self.record("full", level="Full", state="BUILD_VERIFIED")
         self.reg(completed)

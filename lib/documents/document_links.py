@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
@@ -12,13 +13,14 @@ from typing import Iterable, Iterator
 from urllib.parse import unquote, urlsplit
 
 from lib.documents.markdown_headings import iter_visible_lines, markdown_anchors, visible_markdown_lines
-from lib.documents.markdown_links import document_links, prose_lines, without_html_blocks
+from lib.documents.markdown_links import document_links, line_links, prose_lines, without_html_blocks
 from lib.documents.safe_documents import snapshot
 
 
 _QUOTE = re.compile(r"^(?: {0,3}>[ \t]?)+")
 _LIST_ITEM = re.compile(r"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])(?P<gap>[ \t]+|$)")
 _ENTITY = re.compile(r"&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]+);")
+_FILE_SHA = re.compile(r"[ \t]+SHA256=(\S*)")
 
 
 def _list_contents(lines: Iterable[str]) -> Iterator[tuple[int | None, str]]:
@@ -121,12 +123,12 @@ def target_anchors(path):
     return markdown_anchors(text)
 
 
-def body_link_errors(root, source, body, read_anchors, *, html_only=False):
+def _check_links(root, source, body, read_anchors, references, *, html_only=False, on_target=None):
     from lib.documents.plan_documents import local_target
     errors = []
     label = source.relative_to(root).as_posix()
     own_anchors = None
-    for number, link in document_links(document_prose(body)):
+    for number, link, claimed_sha in references:
         try:
             # Markdown 只在实体带分号时解码；例如文件名里的 &copy.md 应保留原样。
             raw = decoded_link(link.raw)
@@ -140,11 +142,17 @@ def body_link_errors(root, source, body, read_anchors, *, html_only=False):
                     continue
             if address.scheme == "file":
                 raise ValueError("本地链接须相对于项目文档")
+            if on_target is not None and (raw.startswith("/") or re.match(r"^[A-Za-z]:", raw)):
+                raise ValueError("本地链接须相对于项目文档")
             if address.netloc or address.scheme:
+                if claimed_sha is not None:
+                    raise ValueError("SHA256 声明须紧接项目内文件链接")
                 continue
             target = source
             if address.path:
                 target = local_target(root, source, address.path, inspect_only=True, allow_spaces=True)
+            if on_target is not None:
+                on_target(target, claimed_sha, bool(address.path))
             if not address.fragment or target.suffix.lower() not in {".md", *HTML_SUFFIXES} or target.is_dir():
                 continue
             fragment = unquote(address.fragment, errors="strict")
@@ -162,6 +170,78 @@ def body_link_errors(root, source, body, read_anchors, *, html_only=False):
             errors.append(f"{label}:{number}: 目标不存在：{link.raw!r}")
         except (OSError, ValueError) as exc:
             errors.append(f"{label}:{number}: {link.raw!r}：{exc}")
+    return errors
+
+
+def body_link_errors(root, source, body, read_anchors, *, html_only=False):
+    references = ((number, link, None) for number, link in document_links(document_prose(body)))
+    return _check_links(root, source, body, read_anchors, references, html_only=html_only)
+
+
+def _projection_references(body):
+    lines = list(document_prose(body))
+    for number, link in document_links(lines):
+        # 只有紧接真实链接的标记才声明文件摘要。Markdown 示例、单独的历史摘要
+        # 及 QA handoff 摘要不属于文件声明。
+        claim = _FILE_SHA.match(lines[number - 1], link.end)
+        yield number, link, claim[1] if claim else None
+    for number, line in enumerate(lines, 1):
+        for link in line_links(line, include_images=True):
+            if line[link.start] == "!":
+                yield number, link, None
+
+
+def projection_link_errors(root: Path, documents: dict[Path, tuple[str, str]], digest_file, *,
+                           acceptance_lines: dict[Path, tuple[int | None, int]]) -> list[str]:
+    """检查验收行采用的全部引用、其他增量及直接 Markdown 证据；保留旧验收引用的去向。"""
+    targets = set()
+    errors = []
+    read_anchors = lru_cache(maxsize=32)(target_anchors)
+
+    def check_target(target, claimed_sha, has_path):
+        if claimed_sha is not None:
+            if not has_path or not re.fullmatch(r"[0-9a-fA-F]{64}", claimed_sha) or not target.is_file():
+                raise ValueError("SHA256 声明须绑定普通文件和 64 位十六进制摘要")
+            if digest_file(target) != claimed_sha.lower():
+                raise ValueError("SHA256 与链接文件的实际字节不符")
+
+    def collect_target(target, claimed_sha, has_path):
+        check_target(target, claimed_sha, has_path)
+        if has_path and target.suffix.lower() == ".md" and target.is_file() and target not in documents:
+            targets.add(target)
+
+    for source, (before, after) in documents.items():
+        old_line, new_line = acceptance_lines.get(source, (None, None))
+        old_statement = before.splitlines()[old_line - 1] if old_line is not None else None
+        after_lines = after.splitlines()
+        previous = Counter()
+        historical_targets = set()
+        for number, link, sha in _projection_references(before):
+            previous[(link.raw, link.label, sha)] += 1
+            if number == old_line:
+                historical_targets.add(link.raw)
+        current = []
+        for number, link, sha in _projection_references(after):
+            identity = (link.raw, link.label, sha)
+            # 本轮验收行即使沿用原链接也须验证实际文件；其它行只查增量，以保留历史快照。
+            if number == new_line or not previous[identity]:
+                current.append((number, link, sha))
+            if previous[identity]:
+                previous[identity] -= 1
+            # 正文中的同名导航不能掩盖历史验收依据的删除。证据保留在当前栏或原样保全的旧行。
+            if number == new_line or after_lines[number - 1] == old_statement:
+                historical_targets.discard(link.raw)
+        for missing in sorted(historical_targets):
+            errors.append(f"{source.relative_to(root)}:{old_line}: 旧验收证据链接须保留可恢复的引用：{missing!r}")
+        errors.extend(_check_links(root, source, after, read_anchors, current, on_target=collect_target))
+    for target in sorted(targets):
+        try:
+            data, _ = snapshot(target)
+            body = data.decode("utf-8")
+            errors.extend(_check_links(root, target, body, read_anchors, _projection_references(body),
+                                       on_target=check_target))
+        except (OSError, ValueError) as exc:
+            errors.append(f"{target.relative_to(root)}: {exc}")
     return errors
 
 
