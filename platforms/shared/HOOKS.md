@@ -1,6 +1,6 @@
 # 3.x 插件的宿主入口
 
-Codex 的插件包声明 SessionStart Hook。用户在官方客户端的 `/hooks` 中核对并信任定义后，新会话可以收到主会话入口提示。提示只负责把本轮显式维护调用或业务请求交给相应流程。安装、信任、事件执行和 PM 实际接管分别核验。
+Codex 的插件包声明 SessionStart 和 Stop Hook。用户在官方客户端的 `/hooks` 中核对并信任定义后，新会话可以收到主会话入口提示。Stop 在本轮即将结束时，只读查询当前物理工作目录与原生主会话身份对应的任务池。如果仍有已绑定的只读或证据任务占用，可以在同一轮提示 PM 通过原生结果和现有证据流程核对一次。结算和后续领取由 PM 使用现有入口。安装、信任、事件执行和 PM 实际接管分别核验。详见 [Codex Stop Hook](https://learn.chatgpt.com/docs/hooks#stop)。
 
 Claude Code 使用插件的 PM Agent 和官方默认设置。Antigravity 使用插件声明的规则及原生 Agent。用户级和项目级的权限、信任与自有 Hook 由相应客户端管理。
 

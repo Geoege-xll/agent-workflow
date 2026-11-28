@@ -311,11 +311,21 @@ class PluginDeliveryTest(unittest.TestCase):
         self.assertEqual({"name", "description", "developer_instructions"}, set(definition))
         self.assertTrue(definition["developer_instructions"].endswith(body.decode()))
 
-    def test_codex_hook_is_only_an_entry_reminder_with_explicit_trust_boundary(self):
+    def test_codex_hooks_package_entry_and_result_closeout_under_native_trust(self):
         root = self.installed["codex"]
         hook = json.loads((root / "hooks/hooks.json").read_bytes())
-        self.assertEqual({"SessionStart"}, set(hook["hooks"]))
+        self.assertEqual({"SessionStart", "Stop"}, set(hook["hooks"]))
         self.assertNotIn("fork", hook["hooks"]["SessionStart"][0]["matcher"])
+        handler, = hook["hooks"]["Stop"][0]["hooks"]
+        self.assertEqual("command", handler["type"])
+        self.assertFalse(handler.get("async", False))
+        self.assertIn("${PLUGIN_ROOT}/hooks/result_closeout.py", handler["command"])
+        metadata = json.loads((root / "sources.json").read_bytes())
+        expected = hashlib.sha256((root / "hooks/result_closeout.py").read_bytes()).hexdigest()
+        self.assertEqual(expected, metadata["source_files"]["plugins/codex/hooks/result_closeout.py"])
+        self.assertEqual(expected, metadata["payload_sha256"]["hooks/result_closeout.py"])
+        for host in ("claude", "antigravity"):
+            self.assertFalse((self.installed[host] / "hooks/result_closeout.py").exists())
         result = subprocess.run([sys.executable, "-B", str(root / "hooks/session_start.py")],
                                 cwd=self.root, env=isolated_environment(self.root / "hook-home"),
                                 input='{"source":"startup"}', capture_output=True, text=True, timeout=15)
@@ -325,7 +335,7 @@ class PluginDeliveryTest(unittest.TestCase):
         self.assertIn(str(root / "skills/xy-workflow/SKILL.md"), output["additionalContext"])
         self.assertNotIn("requirements_approved", output["additionalContext"])
         self.assertFalse((self.root / "hook-home").exists())
-        self.assertTrue(json.loads((root / "sources.json").read_bytes())["hook_trust_required"])
+        self.assertTrue(metadata["hook_trust_required"])
 
     def test_antigravity_preserves_authority_with_its_recorded_adapter_and_native_body_budget(self):
         # 原生 CLI 已证明旧通用适配会让主技能超过 24KB；核对每个实际发现技能

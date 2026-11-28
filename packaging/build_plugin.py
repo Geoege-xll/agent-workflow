@@ -133,7 +133,8 @@ MAINTENANCE_INVOCATIONS = {"codex": "$" + PLUGIN_NAME + ":" + CONFIG_SKILL,
 # 任意变换或覆盖已经装配好的共享资源。跨目录来源只允许明确登记的固定文件。
 HOST_RESOURCE_TARGETS = {
     "codex": {CODEX_NATIVE_CONTEXT: "identity", "skills/" + CONFIG_SKILL + "/agents/openai.yaml": "identity",
-              "hooks/hooks.json": "identity", "hooks/session_start.py": "identity"},
+              "hooks/hooks.json": "identity", "hooks/session_start.py": "identity",
+              "hooks/result_closeout.py": "identity"},
     "claude": {"agents/pm.md": "main-session-entry", "settings.json": "identity"},
     "antigravity": {"hooks.json": "identity", "hooks/write_guard.py": "identity",
                     "hooks/guard_command.py": "identity", "rules/AGENTS.md": "main-session-rules",

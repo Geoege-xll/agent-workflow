@@ -8,6 +8,7 @@
     {"source": "plugins/codex/native-agent-context.md", "target": "plugins/codex/native-agent-context.md"},
     {"source": "plugins/maintenance/skills/xy-config/agents/openai.yaml", "target": "skills/xy-config/agents/openai.yaml"},
     {"source": "plugins/codex/hooks/hooks.json", "target": "hooks/hooks.json"},
-    {"source": "plugins/codex/hooks/session_start.py", "target": "hooks/session_start.py"}
+    {"source": "plugins/codex/hooks/session_start.py", "target": "hooks/session_start.py"},
+    {"source": "plugins/codex/hooks/result_closeout.py", "target": "hooks/result_closeout.py"}
   ]
 }

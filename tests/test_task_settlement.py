@@ -375,63 +375,139 @@ class TaskSettlementTest(unittest.TestCase):
         updated = records.decode(self.source.read_bytes())
         self.assertEqual(["next"], _execute("ready", updated)["ready"])
 
-    def test_real_plugin_settlement_releases_record_slot_and_rejects_old_pack_binding(self):
-        """真实当前插件helper结算原记录；不运行旧中央安装器，不生成pin。"""
+    def test_real_plugin_hook_retains_occupancy_until_existing_settle_releases_it(self):
+        """实际包内 Hook 和正式任务池入口；用明确夹具代表宿主事件和证据。"""
         project = self.root / "project"
         project.mkdir()
-        # 本例要证明任务释放自有资源后，仍保留的外部锁不会阻塞独立现有资源。
-        # 必须提供真实资源节点：Linux无法从空目录只读确认未来名称规则，不存在
-        # 的src/one和external/会正确地共同保守锁住项目父树，不能把它误作未释放。
+        # 资源节点真实存在，验证两个任务可以只因槽位不足而等待。
         (project / "src/one").mkdir(parents=True)
+        (project / "src/two").mkdir()
         (project / "external").mkdir()
+        unrelated = self.root / "other project"
+        unrelated.mkdir()
         installed = plugin_fixture(self.root)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("AGENT_WORKFLOW_") and key != "PYTHONPATH"}
-        payload, change = self.fixture(downstream=True)
-        command = plugin_helper(installed, project, "lib/task_graph_cli.py")
-        admission = plugin_helper(installed, project, "lib/dispatch_admission_cli.py")
-        manifest = self.root / "manifest.json"
-        data = {"schema_version": 1, "project_root": str(project), "records": [],
-                "capacity": {"configured_subagents": 1, "configured_writers": 1, "host_available_subagents": 1}}
-        def view():
-            data["records"] = [{"path": str(self.source), "sha256": records.digest(self.source.read_bytes()),
-                                "execution_roots": {"api": str(project), "next": str(project)}}]
-            manifest.write_text(json.dumps(data), encoding="utf-8")
-            observed = subprocess.run([*admission, "view", "--input", str(manifest)], cwd=project,
-                                      env=environment, text=True, capture_output=True, timeout=60)
-            self.assertEqual(0, observed.returncode, observed.stdout + observed.stderr)
-            return json.loads(observed.stdout)
-        self.assertEqual(1, view()["active_subagents"])
+        environment.update(TMPDIR=str(self.root), PLUGIN_ROOT=str(installed))
+        native_session = "fixture-native-pm"
+        pm_id = "codex:" + native_session
+        capacity = ("--configured-subagents", "1", "--configured-writers", "1", "--host-available-subagents", "1")
+        graph_cli = plugin_helper(installed, project, "lib/task_graph_cli.py")
+        pool_cli = plugin_helper(installed, project, "lib/task_pool_cli.py")
+        hook_config = json.loads((installed / "hooks/hooks.json").read_bytes())
+        closeout = hook_config["hooks"]["Stop"][0]["hooks"][0]["command"]
+
+        def run(command, *args, payload=None, code=0, cwd=project):
+            observed = subprocess.run([*command, *map(str, args)], cwd=cwd, env=environment,
+                                      input=json.dumps(payload) if payload is not None else None,
+                                      text=True, capture_output=True, timeout=60)
+            self.assertEqual(code, observed.returncode, observed.stdout + observed.stderr)
+            return observed.stdout if code == 0 else observed.stderr
+
+        def pool(command, *args, code=0):
+            return json.loads(run(pool_cli, command, "--root", project, "--pm-id", pm_id, *args, code=code))
+
+        def sha():
+            return records.digest(self.source.read_bytes())
+
+        def hook(process_cwd=project, **overrides):
+            event = {"hook_event_name": "Stop", "session_id": native_session, "turn_id": "fixture-turn",
+                     "cwd": str(project), "stop_hook_active": False, "last_assistant_message": "UNTRUSTED COMPLETED"}
+            event.update(overrides)
+            return json.loads(run(["bash", "-c", closeout], payload=event, cwd=process_cwd))
+
+        payload, _ = self.fixture(downstream=True)
+        initial, next_task = payload["tasks"]
+        reference = initial.pop("agent_ref")
+        initial.update(state="DECLARED", blocks=[])
+        next_task.update(depends_on=[], owned_paths=["src/two"], semantic_locks=["next"])
+        for item in next_task["controlled_document_access"]["documents"]:
+            item["applies_to"] = next_task["owned_paths"]
+        payload.update(active_paths=["external/"], active_semantic_locks=["external-lock"])
+        self.source.write_text(json.dumps(payload), encoding="utf-8")
+        self.assertEqual({}, hook())
+        self.assertFalse((self.root / "agent-workflow-request-scratch").exists())
+        pool("register", "--record", self.source, "--expect-sha256", sha())
+        target = ("--record", self.source, "--request-id", initial["request_id"])
+        claimed = pool("claim", *target, "--task-id", initial["id"], "--expect-sha256", sha(), *capacity)
+        receipt = self.root / "claim.json"
+        receipt.write_text(json.dumps(claimed), encoding="utf-8")
+        self.accepted.unlink()
+        run(graph_cli, "task", "--input", self.source, "--task-id", initial["id"],
+            "--output", self.accepted, "--expect-sha256", "missing")
+        self.assertEqual({}, hook())  # 只领取、未知原生创建结果，不触发结算。
+        pool("bind", "--receipt", receipt, "--host", reference["host"], "--agent-id", reference["agent_id"])
+        change = self.settlement_patch({**initial, "agent_ref": reference})
+        waiting = pool("view", *capacity)["admission"]
+        self.assertEqual(1, waiting["active_subagents"])
+        self.assertEqual([], waiting["candidates"])
+        pending = next(item for item in waiting["waiting"] if item["task_id"] == next_task["id"])
+        self.assertEqual(["thread_capacity"], pending["reasons"])
+        self.assertIn("not an admitted spawn candidate",
+                      pool("claim", *target, "--task-id", next_task["id"], "--expect-sha256", sha(),
+                           *capacity, code=2)["error"])
+        before = self.source.read_bytes()
+        reminder = hook()
+        self.assertEqual("block", reminder["decision"])
+        self.assertIn(pm_id, reminder["reason"])
+        self.assertNotIn("UNTRUSTED COMPLETED", reminder["reason"])
+        for event_overrides in (
+            {"hook_event_name": "SubagentStop", "agent_id": reference["agent_id"]},
+            {"agent_id": reference["agent_id"]}, {"session_id": reference["agent_id"]},
+            {"session_id": "another-pm"}, {"stop_hook_active": True}, {"stop_hook_active": "false"},
+        ):
+            with self.subTest(event_overrides=event_overrides):
+                self.assertEqual({}, hook(**event_overrides))
+        self.assertEqual({}, hook(process_cwd=unrelated, cwd=str(unrelated)))
+        self.assertEqual(before, self.source.read_bytes())
+
+        # 缺失登记原件时报告查询失败，既不续行也不创建代用原件。
+        displaced = self.source.with_name("displaced-record.json")
+        self.source.rename(displaced)
+        diagnostic = hook()
+        self.assertEqual({"systemMessage"}, set(diagnostic))
+        self.assertNotIn(str(self.source), diagnostic["systemMessage"])
+        self.assertFalse(self.source.exists())
+        displaced.rename(self.source)
+
         accepted_bytes = self.accepted.read_bytes()
         accepted = json.loads(accepted_bytes)
         accepted["runtime_binding"] = {"unexpected": "old central record"}
         self.accepted.write_text(json.dumps(accepted), encoding="utf-8")
         rejected_change = copy.deepcopy(change)
-        settle = rejected_change["tasks"]["api"]["settle"]
+        proof = rejected_change["tasks"]["api"]["settle"]
         wrong_sha = records.digest(self.accepted.read_bytes())
-        settle["task_pack"]["sha256"] = wrong_sha
-        settle["completion"]["task_pack_sha256"] = wrong_sha
-        settle["result"]["task_pack_sha256"] = wrong_sha
-        rejected, before = self.invoke(payload, rejected_change, command=command, environment=environment, cwd=project)
-        self.assertEqual(2, rejected.returncode, rejected.stdout + rejected.stderr)
-        self.assertIn("runtime_binding", rejected.stderr)
+        proof["task_pack"]["sha256"] = wrong_sha
+        proof["completion"]["task_pack_sha256"] = wrong_sha
+        proof["result"]["task_pack_sha256"] = wrong_sha
+        settle = ("update", "--input", self.source, "--expect-sha256", sha(), "--patch", "-")
+        self.assertIn("runtime_binding", run(graph_cli, *settle, payload=rejected_change, code=2))
         self.assertEqual(before, self.source.read_bytes())
         self.accepted.write_bytes(accepted_bytes)
-        result, _ = self.invoke(payload, change, command=command, environment=environment, cwd=project)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        after = view()
+        self.assertTrue(json.loads(run(graph_cli, *settle, payload=change))["updated"])
+        self.assertEqual("RESULT_VERIFIED", records.decode(self.source.read_bytes())["tasks"][0]["state"])
+        self.assertEqual({}, hook())  # 当前任务结算后，迟到 Stop 不触发再次结算。
+        settled = self.source.read_bytes()
+        run(graph_cli, *settle, payload=change, code=2)
+        self.assertEqual(settled, self.source.read_bytes())
+        after = pool("view", *capacity)["admission"]
         self.assertEqual(0, after["active_subagents"])
         self.assertEqual(0, after["active_writers"])
-        self.assertEqual(["next"], [candidate["task_id"] for candidate in after["candidates"]],
-                         json.dumps(after, ensure_ascii=False, sort_keys=True))
-        # 独立包的真实CLI已覆盖当前卷；额外固定“名称规则未知”的文件边界，
-        # 防止此夹具仅因Darwin的pathconf可用而通过，遗漏Linux空目录的保守投影。
+        self.assertEqual(["next"], [candidate["task_id"] for candidate in after["candidates"]], after)
+
+        # 额外固定“名称规则未知”的文件边界，避免只在当前卷 pathconf 可用时通过。
         from lib import dispatch_admission_cli as admission_cli
+        data = {"schema_version": 1, "project_root": str(project),
+                "records": [{"path": str(self.source), "sha256": sha(),
+                             "execution_roots": {"api": str(project), "next": str(project)}}],
+                "capacity": {"configured_subagents": 1, "configured_writers": 1, "host_available_subagents": 1}}
         with patch.object(admission_cli, "_directory_case_sensitive", return_value=None):
             unknown_names = admission_cli.admission("view", data)
-        self.assertEqual(["next"], [candidate["task_id"] for candidate in unknown_names["candidates"]],
-                         json.dumps(unknown_names, ensure_ascii=False, sort_keys=True))
-        print("PLUGIN_SETTLEMENT: actual packaged update/admission; RESULT_VERIFIED; record slots 1->0; native close unverified", flush=True)
+        self.assertEqual(["next"], [candidate["task_id"] for candidate in unknown_names["candidates"]], unknown_names)
+        claimed_next = pool("claim", *target, "--task-id", next_task["id"], "--expect-sha256", sha(), *capacity)
+        self.assertEqual("claimed", claimed_next["status"])
+        print("PLUGIN_SETTLEMENT: packaged Stop and pool; RESULT_VERIFIED; record slots 1->0; next claimed; native completion fixture",
+              flush=True)
 
     def test_settlement_keeps_external_subtree_when_future_directory_names_are_unknown(self):
         """槽位释放不能解除保留的外部父树锁，空目录继续按未知名称规则保守等待。"""

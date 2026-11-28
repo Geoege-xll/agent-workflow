@@ -88,7 +88,17 @@ the same ID without restart/duplicate dispatch, same-ID followup, and child life
 interruption. A successful version probe/configuration projection proves none of these. Unknown cases remain
 `runtime_unverified`; do not assume final keeps children alive or proactively finish while coordination is needed.
 
-Codex 的每项独立设计／实现沿用同一任务池。先使用共享派发入口领取原件并导出当前包，然后 spawn；从该次返回取实际 ID 并用原领取回执执行 `pool bind`。同时发起多个独立任务时，各自匹配回执及实际 ID。宿主没有确认创建时按原释放／保留规则处理。
+Codex 的每项独立设计／实现沿用同一任务池。先使用共享派发入口领取原件并导出当前包，然后 spawn。从该次返回取实际 ID 并用原领取回执执行 `pool bind`。同时发起多个独立任务时，各自匹配回执及实际 ID。宿主没有确认创建时按原释放／保留规则处理。
+
+### Codex 原生结果收尾
+
+新登记取当前原生主会话身份，使用 `--pm-id codex:<session_id>`，项目根使用该主会话的物理工作目录。已用其他获准标识登记的任务继续通过其原池找回。暂停或找不回原池时保留原占用，并按共享恢复规则核实。
+
+收到绑定 Worker 的原生完成结果时，PM 直接走上述结果验收。主会话准备结束时，已受信任的 [Codex Stop Hook](https://learn.chatgpt.com/docs/hooks#stop) 只读查询同一项目与会话的登记，在有仍占用的已绑定 Codex `read_only` 或 `evidence` 任务时提醒 PM 继续本轮。该轮已有 Stop 续行时由 `stop_hook_active` 跳过，查询失败显示提示并保留原件。Hook 沿用当前用户的暂停、撤回和授权范围。
+
+PM 重读原池和当前原件，通过宿主实际提供的完成结果或原生 wait/status 核对原 ID。Worker 仍在运行且允许等待时，PM 使用宿主等待来继续协调。`SubagentStop` 可以在 Worker 真正完成前触发，结算使用后续实际完成观察、当前已交付并接受的完整包（含适用修订回执）以及结果和验证证据。实际结算释放记录占用后，用当前宿主容量重新查询准入，按原流程启动已有批准且可领取的任务。Writer、唯一独立 QA、宿主线程回收和取消各沿用现有入口。
+
+Stop 只在当前主会话结束前运行。会话已空闲、Hook 被禁用或未受信任、宿主无法提供原 ID 的完成证据时，按现有原生交接和任务池恢复入口核实，保留未确认占用。
 
 Dispatch new schema 2 tasks through a schema_version: 2 single-task envelope containing only the current task, applicable standards_contract, and necessary approval/UI evidence, without copying complete PM or sibling conversations. Stable agent_alias binds project-relative module and canonical role; create new native instances/IDs on demand for independent tasks, without precreation or filling capacity. Tasks retain workflow_level, instance_policy: fresh, and context_policy: handoff_only. When the current tool is collaboration.spawn_agent, explicitly set `fork_turns: "none"`; other native entries must also prove independent initial context and receive only a self-contained current-task prompt. Report a blocker if unavailable rather than falling back to a parent-history fork. Current effective configuration still determines host permissions, model, and effort. Inspect the current native spawn schema for its supported role selector; `task_name` names the task and does not prove a `xy-*` descriptor, model, or effort was selected. Use a native role argument only when that current authorized surface actually exposes it. Do not report native role/model execution as verified from file parsing or a task label; preserve the existing dispatch flow and report the missing native selection evidence.
 
