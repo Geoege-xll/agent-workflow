@@ -180,23 +180,18 @@ def registered_record_paths(root: Path) -> frozenset[Path]:
 
 def require_registered_scratch_keeps(target: Path, keep: tuple[str, ...], originals) -> None:
     """物理身份比对补足 macOS 等文件系统上的原件路径别名保护。"""
+    from lib.task_closeout import relative_under
+
     try:
-        scope = target.stat()
+        target.stat()
     except FileNotFoundError:
         return
-    depth = len(target.parts)
     kept = {target / relative for relative in keep}
     for original in originals:
-        if len(original.parts) <= depth:
+        relative = relative_under(original, target)
+        if relative is None:
             continue
-        parent = Path(*original.parts[:depth])
-        if parent != target:
-            try:
-                if not os.path.samestat(scope, parent.stat()):
-                    continue
-            except FileNotFoundError:
-                continue
-        if target / original.relative_to(parent) in kept:
+        if target / relative in kept:
             continue
         try:
             info = original.stat()
@@ -578,7 +573,8 @@ def cleanup_request(root, pm_id, request_id, *, dry_run, keep, expected, handoff
         selected = {Path(snap.descriptor["path"]) for snap, _ in rows}
         for path, source in originals:
             requests = {task["request_id"] for task in dispatch.authoritative_tasks(source)}
-            if (path.is_relative_to(target) and (path not in selected or requests != {request_id})
+            inside = task_closeout.relative_under(path, target) is not None
+            if (inside and (path not in selected or requests != {request_id})
                     or request_id in requests and path not in selected):
                 raise TaskGraphError("scratch request ownership overlaps another registered original")
         kept = task_closeout.keep_scratch(target, originals, records._scratch_keep_paths(keep))

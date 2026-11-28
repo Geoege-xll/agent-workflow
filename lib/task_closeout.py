@@ -75,6 +75,21 @@ def verify_evidence(item):
     return path
 
 
+def relative_under(path, directory):
+    """按祖先目录的物理身份判定归属，返回相对拼写供后续快照逐项核对。"""
+    depth = len(directory.parts)
+    if len(path.parts) < depth:
+        return None
+    ancestor = Path(*path.parts[:depth])
+    if str(ancestor) != str(directory):
+        try:
+            if not ancestor.samefile(directory):
+                return None
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+    return path.relative_to(ancestor)
+
+
 def preservation(path, rows):
     """仅检查 PM 指定的原字节证据；预览不复制产物，也不查询宿主。"""
     body = records.read_record(path)
@@ -86,7 +101,7 @@ def preservation(path, rows):
     originals = {Path(snap.descriptor["path"]) for snap, _ in rows}
     for item in value:
         proof = verify_evidence(item)
-        if any(proof.is_relative_to(root) for root in isolated):
+        if any(relative_under(proof, root) is not None for root in isolated):
             raise TaskGraphError("preserved evidence must be outside disposable execution worktrees")
         if any(proof.samefile(original) for original in originals):
             raise TaskGraphError("preservation cannot use the mutable original task record as evidence")
@@ -194,18 +209,27 @@ def _preserved_references(source):
 def keep_scratch(target, originals, keeps):
     """保留全部登记原件和能从原记录解析的显式证据定位；模糊路径拒绝清理。"""
     keep = set(keeps)
-    prefix = str(target) + "/"
+    # 以请求槽名和祖先层数定位原文中的绝对路径，实际归属再比较目录身份。
+    # 只用忽略大小写的整路径比较会在敏感卷上混入另一个槽，也会漏掉 Unicode 拼写。
+    prefix = re.compile(r"/(?:[^/\n\r]+/){%d}%s/" % (len(target.parts) - 2, re.escape(target.name)),
+                        re.IGNORECASE)
     for path, source in originals:
-        if path.is_relative_to(target):
-            keep.add(path.relative_to(target).as_posix())
+        relative = relative_under(path, target)
+        if relative is not None:
+            keep.add(relative.as_posix())
         for item in _preserved_references(source):
-            if prefix not in item:
-                continue
-            if item.startswith(prefix) and Path(item).is_file():
-                keep.add(Path(item).relative_to(target).as_posix())
-                continue
-            for match in re.finditer(re.escape(prefix) + r'([^\n\r"\x27\x60<>;)#]+)', item):
-                candidate = match[1].strip()
+            for match in prefix.finditer(item):
+                location = Path(match.group())
+                suffix = item[match.end():]
+                if relative_under(location, target) is None:
+                    continue
+                if match.start() == 0 and Path(item).is_file():
+                    keep.add(suffix)
+                    break
+                name = re.match(r'[^\n\r"\x27\x60<>;)#]+', suffix)
+                if not name:
+                    continue
+                candidate = name[0].strip()
                 if not (target / candidate).is_file():
                     raise TaskGraphError("cannot prove a referenced scratch path is preserved")
                 keep.add(candidate)

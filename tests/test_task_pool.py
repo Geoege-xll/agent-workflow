@@ -159,6 +159,31 @@ class TaskPoolTest(unittest.TestCase):
         self.assertFalse(artifact.exists())
         self.assertEqual("registered", self.call(competing_registration, pm="codex:newcomer")["status"])
 
+    def test_cleanup_recognizes_embedded_reference_only_in_its_physical_slot(self):
+        folder = Path(self.graph_call("scratch", "--request-id", "referenced")["scratch_dir"])
+        other = folder.with_name(folder.name.upper())
+        same_slot = other.exists() and other.samefile(folder)
+        if not same_slot:
+            other.mkdir()
+        evidence = other / "Evidence.log"
+        evidence.write_bytes(b"recorded bytes")
+        sibling = folder / "disposable.tmp"
+        sibling.write_bytes(b"unused")
+        record = self.record("elsewhere")
+        source = json.loads(record.read_bytes())
+        source["task"]["acceptance_evidence"] = [f"verification output `{evidence}`"]
+        self.write(record, source)
+        self.reg(record)
+        command = ("cleanup-scratch", "--request-id", "referenced")
+        if same_slot:
+            self.assertIn("referenced", self.graph_call(*command, "--dry-run", code=2)["error"])
+            self.assertTrue(sibling.exists())
+        else:
+            preview = self.graph_call(*command, "--dry-run")
+            self.graph_call(*command, "--expect-sha256", preview["snapshot_sha256"])
+            self.assertFalse(sibling.exists())
+        self.assertEqual(b"recorded bytes", evidence.read_bytes())
+
     def test_two_full_closeouts_preserve_current_qa_contract_and_allow_cleanup(self):
         from lib.foundation_qa import current_request_receipt
         from lib.solution_confirmation import bind_decisions, decision_gates
@@ -182,23 +207,36 @@ class TaskPoolTest(unittest.TestCase):
         self.assertTrue(current_request_receipt(source, source["tasks"][2], root=self.root))
         request = source["tasks"][2]["request_id"]
         folder = Path(self.graph_call("scratch", "--request-id", request)["scratch_dir"])
-        original, delivered, unused, manifest, terminal = (
-            folder / name for name in ("graph.json", "result.log", "regenerable.txt", "proof.json", "terminal.json")
-        )
+        saved = folder / "Evidence"
+        saved.mkdir()
+        other = folder.with_name(folder.name.upper()) / "eVIDENCE"
+        folded = other.is_dir() and other.samefile(saved)
+
+        def reference(path):
+            return other / path.name.swapcase() if folded else path
+
+        original, delivered, manifest, native, explicit = (saved / name for name in (
+            "Graph.json", "Result.log", "Proof.json", "Native.log", "Kept.bin"))
+        unused, terminal = folder / "regenerable.txt", folder / "terminal.json"
         self.write(original, source)
-        delivered.write_text("verified result and observed native closure")
+        delivered.write_bytes(b"verified result")
+        native.write_bytes(b"observed native closure")
+        explicit.write_bytes(b"manually retained")
         unused.write_text("regenerable artifact")
-        evidence = {"path": str(delivered), "sha256": self.sha(delivered)}
-        self.write(manifest, [evidence])
-        self.reg(original)
+        self.write(manifest, [{"path": str(reference(delivered)), "sha256": self.sha(delivered)}])
+        self.reg(reference(original))
+        if not folded:
+            # 在敏感卷上，这两个仅拼写不同的普通文件必须保持独立。
+            (saved / delivered.name.swapcase()).write_bytes(b"disposable case twin")
         for task_id in (source["tasks"][0]["id"], "qa"):
-            plan = self.call(["closeout", "--request-id", request, "--preservation", str(manifest)])
+            plan = self.call(["closeout", "--request-id", request, "--preservation", str(reference(manifest))])
             self.assertEqual("ready", plan["status"], plan.get("reason"))
             selected = next(target for target in plan["targets"] if target["task_id"] == task_id)
             self.write(terminal, {"schema_version": 1, "agent_ref": selected["agent_ref"], "outcome": "closed",
-                                  "native_evidence": evidence, "preservation": plan["preservation"]})
+                                  "native_evidence": {"path": str(reference(native)), "sha256": self.sha(native)},
+                                  "preservation": plan["preservation"]})
             result = self.call(["finish-closeout", "--request-id", request, "--task-id", task_id,
-                                "--record", str(original), "--expect-sha256", selected["sha256"],
+                                "--record", str(reference(original)), "--expect-sha256", selected["sha256"],
                                 "--evidence", str(terminal)])
             self.assertEqual("closed", result["status"])
             reached = json.loads(original.read_bytes())
@@ -207,11 +245,22 @@ class TaskPoolTest(unittest.TestCase):
             self.assertTrue(current_request_receipt(reached, reached["tasks"][2], root=self.root))
             self.assertEqual([task.get("acceptance_evidence") for task in source["tasks"]],
                              [task.get("acceptance_evidence") for task in reached["tasks"]])
-        cleanup = ("cleanup-scratch", "--pm-id", self.pm, "--request-id", request)
+        # CAS 原子发布可能采纳登记时的拼写，从磁盘枚举这份最终原件的实际名字。
+        preserved = {file.relative_to(folder).as_posix(): file.read_bytes() for file in saved.iterdir()
+                     if folded or file.name != delivered.name.swapcase()}
+        keep_name = "eVIDENCE/" + explicit.name.swapcase() if folded else explicit.relative_to(folder).as_posix()
+        if not folded:
+            rejected = self.graph_call("cleanup-scratch", "--pm-id", self.pm, "--request-id", request,
+                                       "--keep", "Evidence/" + explicit.name.swapcase(), "--dry-run", code=2)
+            self.assertIn("scratch keep path", rejected["error"])
+        cleanup = ("cleanup-scratch", "--pm-id", self.pm, "--request-id", request, "--keep", keep_name)
         scan = self.graph_call(*cleanup, "--dry-run")
+        self.assertEqual(set(preserved), set(scan["kept_files"]))
+        self.assertIn(unused.name, scan["candidate_sample"])
         self.graph_call(*cleanup, "--expect-sha256", scan["snapshot_sha256"])
         self.assertFalse(unused.exists())
-        self.assertTrue(original.is_file() and delivered.is_file() and manifest.is_file())
+        self.assertEqual(preserved, {file.relative_to(folder).as_posix(): file.read_bytes()
+                                     for file in saved.iterdir()})
         after_cleanup = json.loads(original.read_bytes())
         self.assertTrue(current_request_receipt(after_cleanup, after_cleanup["tasks"][2], root=self.root))
         self.assertEqual("ready", self.call(["closeout", "--request-id", request])["status"])
