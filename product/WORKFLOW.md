@@ -1026,11 +1026,12 @@ The portable `worktree_cli.py` provides actual root creation/identity checks, fi
 guarded fast-forward local delivery. It never pushes, switches the target branch, force-updates,
 resolves conflicts or discards dirty work. Target movement invalidates the candidate's delivery binding.
 
-Concurrency is configured in `project.yaml`:
+New project adapters default to 20 concurrent subagents. Existing adapters keep their configured
+limit, and dispatch also depends on the host's available subagent slots.
 
 ```yaml
 orchestration:
-  max_concurrent_subagents: 8
+  max_concurrent_subagents: 20
   max_parallel_writers: 6
   max_writers_per_path: 1
   max_depth: 1
