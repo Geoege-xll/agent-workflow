@@ -1041,19 +1041,18 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
         self.assertIn("selected:", schema)
         self.assertIn("capability_evidence:", schema)
 
-    def test_full_work_uses_bundled_grilling_and_draft_planning_before_approval(self) -> None:
+    def test_full_work_uses_established_facts_and_draft_planning_before_approval(self) -> None:
         """Full 前置链必须跨事实源一致，且 QA 前不得污染正式项目真相。"""
 
         sources = (
             "product/WORKFLOW.md",
-            "platforms/shared/skills/xy-workflow/SKILL.md",
             "platforms/shared/skills/xy-workflow/SKILL.md",
             "platforms/claude/references/pm-integration.md",
             "platforms/antigravity/references/pm-integration.md",
         )
         anchors = (
             "Full",
-            "Grill Me coverage check",
+            "planning coverage",
             "xy-plan",
             "plan_state: draft",
             "requirements_approved",
@@ -1076,10 +1075,9 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
 
     def test_planning_is_core_and_grilling_is_a_bundled_upstream_primitive(self) -> None:
         """内部规划与第三方原版分离，不能通过伪本地Grill Me隐藏二级primitive。"""
-        from lib.skills.role_skills import CORE_SKILLS, PM_SKILLS, SELECTED_SKILLS
+        from lib.skills.role_skills import CORE_SKILLS, SELECTED_SKILLS
         self.assertNotIn("grill-me", CORE_SKILLS)
         self.assertEqual({"xy-grill-me", "xy-grilling", "xy-impeccable", "xy-playwright"}, set(SELECTED_SKILLS))
-        self.assertEqual(("xy-grilling",), PM_SKILLS)
         self.assertIn("xy-plan", CORE_SKILLS)
         canonical = PACK / "third_party/selected-skills/grill-me/skills/productivity"
         entry = (canonical / "grill-me/SKILL.md").read_text(encoding="utf-8")
@@ -1221,7 +1219,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                     self.assertNotIn(phrase, text)
 
     def test_full_bugs_use_coverage_and_light_bugs_keep_the_native_path(self) -> None:
-        """Full 缺陷不能绕过澄清与计划；清晰的小缺陷仍保持轻量修复路径。"""
+        """清楚的两档缺陷都可直接判级，Full 仍须规划。"""
 
         for relative in (
             "product/WORKFLOW.md",
@@ -1237,7 +1235,7 @@ class LightweightSkillAndReviewPolicyContractTest(unittest.TestCase):
                 normalized,
             )
             self.assertIn(
-                "A `Full` bug still runs the Grill Me coverage check and `xy-plan`",
+                "A clear Full bug proceeds to `xy-plan` using the known symptom",
                 normalized,
             )
 

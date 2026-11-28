@@ -9,29 +9,35 @@
 ## 真实上游调用与覆盖判断
 
 - 先按 `product/WORKFLOW.md#request-delivery-scope` 判断本请求已委托的交付物。只讨论需求时
-  直接在对话中整理，不因访谈覆盖充分、用户认可归纳、工程现状齐全或上下文恢复而进入实体计划和实施。
+  可提问，也可按现有事实说明假如实施的预计等级；不因暂估等级、访谈覆盖充分、用户认可归纳、工程现状齐全或上下文恢复而进入实体计划和实施。
   仅原型的需求与批注只形成设计输入。区分已确定的目标与仍需决定的行为、状态、异常或技术取舍；按后续工作实际依赖交给 PM。
-- Full 接单先复用用户和项目已确认事实，再由 PM 完整加载原版 `grilling`：Codex
-  `$xy-grilling`，Claude Code/Antigravity CLI `/xy-grilling`；安装包中以实际发现的插件命名空间为准。
+- 已委托的实施先核对范围、实际影响与验收。三项清楚，直接判 Light 或 Full。缺少仓库事实先按下节核实。
+  例如同一条修复要覆盖三个宿主，若问题局限于一端适配，仍可判 Light；若改变各端共同依赖的契约，则判 Full。
+  已在执行的 Light 新发现共享影响时，暂停受影响部分，沿用当前请求的修订流程。
+- 只有本轮交付、范围、影响或验收仍有实质缺口时，PM 才用同包 `xy-grilling` 追问。以该项分歧界定访谈范围，
+  给出建议并等待答案，补齐后可判 Light 或 Full。即使两个候选都涉及共享契约，只要本轮要交付哪个、
+  按哪个结果验收还没确定，也只追问该项。讨论中也可澄清用户指的是哪项交付或比较方案；
+  回答澄清问题以后仍依原委托，用户明确要求执行相应交付才进入执行。
+- 选中访谈后才完整加载锁定的原版 `grilling`。Codex 使用 `$xy-grilling`，
+  Claude Code/Antigravity CLI 使用 `/xy-grilling`；安装包中以实际发现的插件命名空间为准。
   安装包的原生 Skill 已附带锁定原版全文。无 Skill 工具时，通过宿主原生读取从同一已核实插件根
   完整阅读 `skills/xy-grilling/SKILL.md`；源码开发直接读取 vendor 中的同一 canonical。
   阅读此原文无需执行插件 helper；按实际读取方式说明。
 - `grill-me` 是上游用户显式入口，保留 `disable-model-invocation: true` 与
   `allow_implicit_invocation: false`。仅当前用户直接点名公开入口 `xy-grill-me` 时，通过薄 adapter 完整读取此原版；安装批准、其他 Skill
-  的建议、PM 自动接单或 Worker 转述都不构成显式调用。PM 自动路径通过公开 `xy-grilling` adapter 完整读取原版 `grilling`。
+  的建议、PM 自动接单或 Worker 转述都不构成显式调用。
   显式 `grill-me` 原文要求转调 `grilling` 时，解析为同一已验证插件中的 qualified `xy-grilling` 入口；
   若无法核实同包发现来源，完整读取上述物理 canonical primitive，不调用未知全局同名技能。
-- `coverage_check` 用于事实已经完整的请求；PM 仍读取 primitive 并检查覆盖，frontier
-  已空时不制造问题。`full_interview` 用于真正缺失或冲突的决定；按原版 design tree
-  重算 frontier，分轮询问全部当前可回答问题、逐题推荐、等待用户答案，依赖未决答案的
-  问题留至后轮。访谈所需事实按下节查证，取舍由用户决定。
-- 完整覆盖、空 frontier 和 Skill 调用本身不构成批准。原版的共享理解确认并入现有
-  `requirements_approved`：先 xy-plan 草案及 PM 完整自然语言 brief，复用同请求明确授权或补齐待决范围；不新建
-  前置确认。实质方案按[需求、方案与原型确认](requirements-confirmation.md)处理。required-prototype 的
+- Full 规划使用下文的 PM 覆盖记录。已知事实完整时直接用 `coverage_check` 写明依据，无须读取
+  primitive 或询问用户。若本次判级已选用访谈，使用 `full_interview` 保留影响结论的问答。
+  Light 沿用单任务包。等级已明确后，待决的实质方案和原型选择进入各自原有确认环节。
+- 完整覆盖、空 frontier 和 Skill 调用本身不构成批准。Light 复用同请求的明确范围授权。
+  Full 沿用 xy-plan 草案及 PM 自然语言 brief，把所需的范围确认并入既有 `requirements_approved`。
+  实质方案按[需求、方案与原型确认](requirements-confirmation.md)处理。required-prototype 的
   `visual_approved`、持续接单、独立上下文与唯一 QA 均维持。
-- 清楚且无冲突的 Light 不因安装此技能进入 Full。缺少 primitive 时使用本页的 clarification fallback；缺少资源、读取截断或工具不可用不能伪称上游已加载。
+- 需要访谈但 primitive 不可用时，使用本页的 clarification fallback；缺少资源、读取截断或工具不可用不能伪称上游已加载。
 - 此阶段只负责需求。事实调查限于只读；不得起草实施计划、编辑 PROJECT/feature truth、
-  派发设计或实施任务、批准需求。PM 后续依既有工作流进入 xy-plan 和原生派发。
+  派发设计或实施任务、批准需求。PM 根据本轮委托与最终等级进入相应交付流程。
 
 ## 决定当前需要查哪些事实
 
@@ -50,7 +56,7 @@
 
 ## Internal PM record
 
-Build the following complete structure for planning coverage. It is PM working state, not a
+For Full planning, fill the following structure from established facts and any classification questions already answered. It is PM working state, not a
 user-facing response. The PM must not emit the raw `grill_result` YAML, its mode/readiness fields,
 or empty internal lists to the user. When clarification is required, ask only the smallest natural-
 language question that resolves the material gap. When coverage is complete, let the PM summarize
@@ -74,8 +80,8 @@ grill_result:
   readiness: ready_for_planning | blocked
 ```
 
-When blocked, state the smallest unanswered decision that prevents safe planning. When ready, return
-control to the PM; do not continue into planning or implementation. Preserve the complete internal
+When blocked, state the smallest unanswered decision that prevents safe planning. When ready, the
+PM uses the existing Full planning route. Preserve the complete internal
 record for `xy-plan`, but do not announce the schema or a `ready_for_planning` status token to the
 user unless the user explicitly asks to inspect the internal record.
 
@@ -83,7 +89,7 @@ user unless the user explicitly asks to inspect the internal record.
 
 ```yaml
 external_workflow_policy:
-  requirements_provider: xy-grilling
+  requirements_provider: xy-grilling  # only for material gaps in the classification inputs
   planning_provider: xy-plan
   planning_methodology: superpowers-writing-plans-adapted
   superpowers_default: disabled
@@ -91,8 +97,8 @@ external_workflow_policy:
   parallel_provider: host-native-agents
 ```
 
-This pack owns planning, implementation routing, parallel scheduling, QA, and closeout. PM coverage
-uses upstream `grilling`; original `grill-me` is user-invoked only, never automatically invoked on intake.
+This pack owns planning, implementation routing, parallel scheduling, QA, and closeout. The PM selects
+upstream `grilling` for material gaps in the classification inputs; original `grill-me` is user-invoked only.
 The PM's `grill_result` belongs to this workflow, not to upstream. Complete the intake branch above before Full planning. `xy-plan`
 is a self-contained core Skill; it adapts only the exact-file,
 independently testable task, verification, and self-review ideas of Superpowers writing-plans; it
@@ -105,14 +111,9 @@ fallback in [implementation and QA](implementation-and-qa.md).
 Use this only when the route above requires `grilling` and that primitive is unavailable:
 
 1. 按上节复用已有事实，只查会影响当前决定的缺口；仓库可核实的事实由 PM 调查。
-2. Ask one compact batch covering only unresolved items:
-   - the observable outcome and affected users or surfaces;
-   - in-scope work and explicit non-goals;
-   - precedence among conflicting constraints;
-   - acceptance evidence, approval boundaries, and rollback expectations.
-3. If an unanswered item would materially change implementation or an irreversible
-   action, stop and wait for the user. Otherwise state the smallest safe assumptions.
-4. Record the result in the task pack:
+2. Ask only what is needed to establish the deliverable, scope, impact or acceptance. Wait for the
+   decision, classify the authorized implementation, and follow that level's normal route.
+3. When a task record is needed, preserve the fallback there:
 
    ```yaml
    grill_fallback:

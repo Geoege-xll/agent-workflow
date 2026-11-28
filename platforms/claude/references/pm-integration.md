@@ -113,13 +113,14 @@ select prototype work, direct implementation, or the clearly named recommendatio
 
 ## Gates and execution
 
-- Full: classify → optional relevant facts → Grill Me coverage check via `/xy-workflow:xy-grilling` → `/xy-workflow:xy-plan`
+- Full: classify → record planning coverage from established facts → `/xy-workflow:xy-plan`
   with `plan_state: draft` → PM
   post-QA controlled-document projection decision → confirm scope and any material solution before dependent prototype or implementation → dispatch eligible work.
   Keep accepted PROJECT/plans baselines at its last QA-verified state until integrated QA PASS. Clear
-  Light work may skip the two Skills when facts are complete.
-- PM loads bundled original `grilling` in the main session, using the actual discovered plugin-qualified
-  Skill entry; `grill-me` remains user-invoked only. Read xy-workflow/references/requirements-intake.md
+  Light work uses the single-task route.
+- Classify an explicitly delegated implementation directly as Light or Full when scope, impact and acceptance
+  are clear. Use `/xy-workflow:xy-grilling` only for a material gap in the deliverable, scope, impact or acceptance.
+  Original `grill-me` remains user-invoked only. Read xy-workflow/references/requirements-intake.md
   for the PM-owned coverage schema. Worker `skills` preloading does not prove main-session loading.
   Grill Me remains requirements-only. Superpowers is disabled by default except the bounded reviewer
   fallback below; `xy-plan` is the local planner. Reopen only the affected scope, solution or page decision when its substance changes.

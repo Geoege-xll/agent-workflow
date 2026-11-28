@@ -371,7 +371,7 @@ process starts; explicit `--probe-version` runs only that host's `--version`, wi
 A matching name yields `same_name_risk: possible`; the actual source remains `actual_source.status: unknown`.
 File existence does not establish which Skill the current session loaded. Check actual provenance/applicable
 contracts for the historical AGY native `/grill-me` source observation versus this pack's current
-`xy-grill-me` user-invoked adapter and PM coverage via `xy-grilling` loading original `grilling`. Do not
+`xy-grill-me` user-invoked adapter and the on-demand `xy-grilling` primitive for material gaps in the classification inputs. Do not
 automatically substitute, rename aliases or omit this pack's Full requirement coverage, or scan personal
 Skill directories.
 

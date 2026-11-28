@@ -132,7 +132,7 @@ class PluginWorkflowContractTest(unittest.TestCase):
                         self.assertLess(locator.index(serial_read), locator.index("等它成功返回后".encode()))
                         self.assertIn("不要把产品全文、阶段引用或项目文件并入这次读取".encode(), locator)
                         # 仅原型首轮遇到的是范围确认；不在这个分支摆放待批的下游文件链接。
-                        # 同时检查后续设计链接和 Full 必读的覆盖原版，防止直接删规则来通过负控。
+                        # 同时检查后续设计链接、判级缺口入口与清楚的 Full 规划入口。
                         route = body.decode().split("**只做原型**", 1)[1].split("**已委托开发**", 1)[0]
                         self.assertNotIn("](references/", route)
                         self.assertIn("已有有效确认则直接复用", route)
@@ -145,7 +145,10 @@ class PluginWorkflowContractTest(unittest.TestCase):
                         self.assertIn("](dispatch.md#continuous-intake-dispatch)", ui_design)
                         dispatch = (references / "dispatch.md").read_text(encoding="utf-8")
                         self.assertIn('<a id="continuous-intake-dispatch"></a>', dispatch)
-                        self.assertIn("完整读取[需求接单](references/requirements-intake.md)及选中的 `grilling` 原版".encode(), body)
+                        level, planning = body.decode().split("**Full 需求与计划。**", 1)
+                        self.assertIn("范围、影响和验收清楚时直接判 Light 或 Full", level)
+                        self.assertIn("只有判级所需的交付、范围、影响或验收仍有实质缺口时，才按[需求接单]", level)
+                        self.assertIn("清楚的 Full 直接用已有事实填写覆盖记录，进入 `xy-plan` 草案", planning)
                     else:
                         self.assertNotIn(serial_read, locator)
                     self.assertEqual(adapter_source,
@@ -160,16 +163,20 @@ class PluginWorkflowContractTest(unittest.TestCase):
         """消费已构建三端的真实接入文字，锁定自动/显式入口与默认原型权限边界。"""
         for host, root in self.installed.items():
             with self.subTest(host=host):
-                # 从实际发现入口解析随包分发的分支，确认 Full 的上游选择可达。
+                # 从实际发现入口确认上游只用于判级缺口，已知事实可直接交给规划。
                 workflow = policy.read_instruction_contract(root, "skills/xy-workflow/SKILL.md")
                 intake = (root / "skills/xy-workflow/references/requirements-intake.md").read_text(encoding="utf-8")
                 design = (root / "skills/xy-ui-design/SKILL.md").read_text(encoding="utf-8")
                 adapter = (root / "skills/xy-impeccable/SKILL.md").read_text(encoding="utf-8")
                 original = root / "third_party/selected-skills/impeccable/plugin/skills/impeccable/SKILL.md"
-                self.assertIn("requirements_provider: xy-grilling", workflow)
+                self.assertIn("requirements_provider: xy-grilling  # only for material gaps in the classification inputs", workflow)
                 self.assertIn("`grill-me` 是上游用户显式入口", intake)
                 self.assertIn("不是上游 Grill Me 的 schema", intake)
                 self.assertIn("同一已验证插件", intake)
+                self.assertIn("补齐后可判 Light 或 Full", intake)
+                self.assertIn("即使两个候选都涉及共享契约", intake)
+                plan = (root / "skills/xy-plan/SKILL.md").read_text(encoding="utf-8")
+                self.assertIn("A clear Full request needs no interview", plan)
                 # 分页合同只存在于真实包的共享规则。先验整包或重新把 Impeccable 写成固定依赖，
                 # 会让沿用现有设计系统的局部任务被无关资源阻断。
                 selection_path = "platforms/shared/skills/xy-workflow/references/skill-selection.md"

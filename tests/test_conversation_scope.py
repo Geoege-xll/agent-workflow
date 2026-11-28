@@ -63,6 +63,30 @@ class ConversationScopeTest(unittest.TestCase):
         self.assertEqual(code, result.returncode, result.stdout + result.stderr)
         return json.loads(result.stdout if code == 0 else result.stderr)
 
+    def test_native_pm_entries_distinguish_discussion_estimates_from_execution(self):
+        # 三个宿主通过不同入口交付 PM 指令，Codex 的文本取自实际启动 Hook。
+        # 模型如何理解逐轮对话另见配套剧本；这里验证它真正收到的指令。
+        for host, package in self.packages.items():
+            with self.subTest(host=host):
+                if host == "codex":
+                    hook = subprocess.run(
+                        ["bash", str(package / "lib/python_runtime.sh"), "-B", str(package / "hooks/session_start.py")],
+                        cwd=self.project, check=True, capture_output=True, text=True, timeout=15,
+                    )
+                    entry = json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"]
+                else:
+                    entry_path = "agents/pm.md" if host == "claude" else "rules/AGENTS.md"
+                    entry = (package / entry_path).read_text(encoding="utf-8")
+                paragraphs = entry.splitlines()
+                discussion = next(line for line in paragraphs if "**Conversation-only discussion.**" in line)
+                delegated = next(line for line in paragraphs if "Use `skills/xy-workflow/SKILL.md`" in line)
+                self.assertIn("likely Light or Full level if implementation were requested", discussion)
+                self.assertIn("only when the user explicitly delegates the corresponding deliverable", discussion)
+                self.assertIn("classify directly as Light or Full", delegated)
+                self.assertIn("only for a material gap in the deliverable, scope, impact or acceptance", delegated)
+                integration = (package / f"platforms/{host}/references/pm-integration.md").read_text(encoding="utf-8")
+                self.assertIn("only for a material gap in the deliverable, scope, impact or acceptance", integration)
+
     def test_scope_is_checked_before_init_can_publish_a_production_task(self):
         # 客户端只把已解析的 PM 决定交给 init，不能用虚构的词表解析用户消息。
         # 对照组复用相同生产任务，只有本次请求的交付范围不同。
